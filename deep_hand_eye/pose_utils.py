@@ -3,7 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 
-def quaternion_angular_error(q1, q2):
+def quaternion_angular_error(q1, q2, in_degrees = True):
     """
     angular error between two quaternions
     :param q1: (4, )
@@ -12,7 +12,9 @@ def quaternion_angular_error(q1, q2):
     """
     d = abs(np.sum(q2 * q1, axis=-1))
     d = np.minimum(1.0, np.maximum(-1.0, d))
-    theta = np.rad2deg(2 * np.arccos(d))
+    theta = 2 * np.arccos(d)
+    if in_degrees:
+        theta = np.rad2deg(theta)
     return theta
 
 

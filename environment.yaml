@@ -135,7 +135,7 @@ dependencies:
     - numpy==1.23.4
     - oauthlib==3.2.2
     - open3d==0.16.0
-    - opencv-python==4.6.0.66
+    - opencv-python-headless==4.6.0.66
     - pandas==1.5.1
     - parso==0.8.3
     - pexpect==4.8.0
