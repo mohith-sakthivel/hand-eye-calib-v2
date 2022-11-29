@@ -3,12 +3,12 @@ import pickle
 import numpy as np
 import theseus as th
 
-from typing import List, Optional,Tuple
-from theseus.geometry import compose, local
+from typing import List, Optional, Tuple
+from theseus.geometry import compose, local, between
 from deep_hand_eye.pose_utils import quaternion_angular_error, homo_to_quat
 
 
-DEVICE = "cpu"
+DEVICE = "cuda"
 
 
 def to_tensor(array: np.ndarray, device: str = DEVICE) -> torch.Tensor:
@@ -39,19 +39,27 @@ class PoseConsistency(th.CostFunction):
     def error(self) -> torch.Tensor:
         EA_T_EB_est = compose(self.E_T_C, compose(self.CA_T_CB, self.E_T_C.inverse()))
         error = self.EA_T_EB.local(EA_T_EB_est)
+
         return error
 
     def jacobians(self) -> Tuple[List[torch.Tensor], torch.Tensor]:
-        Jlist = []
-
-        EA_T_EB_est = compose(self.E_T_C, compose(self.CA_T_CB, self.E_T_C.inverse()))
-
         log_jac = []
-        error = self.EA_T_EB.inverse().compose(EA_T_EB_est).log_map(jacobians=log_jac)
-        dlog = log_jac[0]
-        Jlist.append(dlog @ EA_T_EB_est.inverse().adjoint() - dlog)
 
-        return Jlist, error
+        # Method 1
+        CA_T_CB_est = compose(self.E_T_C.inverse(), compose(self.EA_T_EB, self.E_T_C))
+        error = between(self.CA_T_CB, CA_T_CB_est).log_map(jacobians=log_jac)
+
+        dlog = log_jac[0]
+        JList = [-dlog @ CA_T_CB_est.inverse().adjoint() + dlog,]
+
+        # # Method 2
+        # EA_T_EB_est = compose(self.E_T_C, compose(self.CA_T_CB, self.E_T_C.inverse()))
+        # error = between(self.EA_T_EB, EA_T_EB_est).log_map(jacobians=log_jac)
+
+        # dlog = log_jac[0]
+        # JList = [(dlog @ EA_T_EB_est.inverse().adjoint() - dlog) @ self.E_T_C.adjoint(),]
+
+        return JList, error
 
     def dim(self) -> int:
         return self.E_T_C.dof()
