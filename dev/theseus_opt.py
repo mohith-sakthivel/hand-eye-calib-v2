@@ -198,13 +198,13 @@ def run():
     quat_optimized_error = quaternion_angular_error(quat_optimized, quat_true)
 
     print("Optimization Done... \n\n")
-    print(f"Original Translation Error: {np.mean(trans_pred_error): 0.4f} m")
+    print(f"Original Translation Error: \n\tMean: {np.mean(trans_pred_error): 0.4f} m \n\tMedian: {np.median(trans_pred_error): 0.4f} m")
     print(
-        f"Translation Error after optimization: {np.mean(trans_optimized_error): 0.4f} m\n"
+        f"Translation Error after optimization: \n\tMean: {np.mean(trans_optimized_error): 0.4f} m \n\tMedian: {np.median(trans_optimized_error): 0.4f} m \n"
     )
-    print(f"Original Rotation Error: {np.mean(quat_pred_error):0.2f} deg")
+    print(f"Original Rotation Error: \n\tMean: {np.mean(quat_pred_error):0.2f} deg \n\t Median: {np.median(quat_pred_error):0.2f} deg")
     print(
-        f"Rotation Error after optimization: {np.mean(quat_optimized_error): 0.2f} deg"
+        f"Rotation Error after optimization: \n\tMean: {np.mean(quat_optimized_error): 0.2f} deg \n\tMedian: {np.median(quat_optimized_error): 0.2f} deg"
     )
 
 
