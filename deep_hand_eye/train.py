@@ -1,19 +1,19 @@
 import os
-import datetime
 import random
+import datetime
 import numpy as np
-from pathlib import Path
 from tqdm import tqdm
+from pathlib import Path
 
 import torch
 import torch.utils.tensorboard as tb
 from torch_geometric.loader import DataLoader
 
 import deep_hand_eye.pose_utils as p_utils
-from deep_hand_eye.utils import AttrDict
 from deep_hand_eye.model import GCNet
+from deep_hand_eye.utils import AttrDict
 from deep_hand_eye.dataset import MVSDataset
-from deep_hand_eye.losses import PoseNetCriterion
+from deep_hand_eye.losses import PoseCriterion, PoseCriterionSE3
 
 
 config = AttrDict()
@@ -25,6 +25,7 @@ config.save_dir = ""
 config.model_name = ""
 config.batch_size = 16
 config.eval_freq = 2000
+config.eval_samples = 2000
 config.log_freq = 20    # Iters to log after
 config.save_freq = 5   # Epochs to save after. Set None to not save.
 config.rel_pose_coeff = 1   # Set None to remove this auxiliary loss
@@ -85,17 +86,16 @@ class Trainer(object):
         self.params = sum([np.prod(p.size()) for p in self.model_parameters])
 
         # Define loss
-        self.train_criterion_R = PoseNetCriterion(
+        self.train_criterion_R = PoseCriterion(
             beta=self.beta_loss_coeff,
             gamma=self.gamma_loss_coeff,
             learn_beta=True
         ).to(self.device)
-        self.train_criterion_he = PoseNetCriterion(
+        self.train_criterion_he = PoseCriterionSE3(
             beta=self.beta_loss_coeff,
             gamma=self.gamma_loss_coeff,
             learn_beta=True
         ).to(self.device)
-        self.val_criterion = PoseNetCriterion().to(self.device)
 
         # Define optimizer
         param_list = [{'params': self.model.parameters()}]
@@ -158,7 +158,8 @@ class Trainer(object):
                     self.eval(
                         dataloader=self.test_dataloader,
                         iter_no=iter_no,
-                        eval_rel_pose=self.config.rel_pose_coeff is not None
+                        eval_rel_pose=self.config.rel_pose_coeff is not None,
+                        max_samples=self.config.eval_samples
                     )
                     self.model.train()
                 iter_no += 1
@@ -194,10 +195,10 @@ class Trainer(object):
             target_he = data.y.to('cpu').numpy()
 
             # normalize the predicted quaternions
-            q = [p_utils.qexp(p[3:]) for p in output_he]
-            output_he = np.hstack((output_he[:, :3], np.asarray(q)))
-            q = [p_utils.qexp(p[3:]) for p in target_he]
-            target_he = np.hstack((target_he[:, :3], np.asarray(q)))
+            q = [p_utils.homo_to_quat(p) for p in output_he]
+            output_he = np.hstack((output_he[:, :3, 3], np.asarray(q)))
+            q = [p_utils.homo_to_quat(p) for p in target_he]
+            target_he = np.hstack((target_he[:, :3, 3], np.asarray(q)))
 
             # calculate losses
             for p, t in zip(output_he, target_he):

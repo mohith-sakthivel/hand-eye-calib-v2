@@ -99,7 +99,7 @@ class MVSDataset(Dataset):
         # Get inverse to multiply onto absolute positions
         hand_eye_inv = p_utils.invert_homo(hand_eye_matrix)
         # Create ground truth 7-sized vector of the hand-eye calibration
-        hand_eye = p_utils.homo_to_log_quat(hand_eye_matrix)
+        hand_eye = hand_eye_matrix[..., :3, :].astype(np.float32)
 
         # Get 5 images of a randomized brightness
         image_list = []

@@ -1,13 +1,15 @@
 import numpy as np
 
 import torch
+import theseus as th
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
 
 from deep_hand_eye.resnet import resnet34
 from deep_hand_eye.utils import unbatch
-
+from deep_hand_eye.pose_utils import qexp
+from deep_hand_eye.theseus_opt import build_BA_Layer
 
 class SimpleEdgeModel(nn.Module):
     """
@@ -238,6 +240,7 @@ class GCNet(nn.Module):
         self.pose_proj_dim = pose_proj_dim
         self.rel_pose = rel_pose
         self.edge_feat_dim = edge_feat_dim
+        self.theseus_layer = None
 
         # Setup the feature extractor
         self.feature_extractor = resnet34(pretrained=True)
@@ -371,6 +374,7 @@ class GCNet(nn.Module):
             xyz_R = self.xyz_R(edge_R_feat).squeeze()
             wpqr_R = self.wpqr_R(edge_R_feat).squeeze()
             rel_pose_out = torch.cat((xyz_R, wpqr_R), 1)
+            p_R = torch.concatenate([xyz_R, qexp(wpqr_R)], dim=-1).reshape(data.num_graphs, -1, 7)
         else:
             rel_pose_out = None
 
@@ -395,5 +399,39 @@ class GCNet(nn.Module):
         # Predict the hand-eye parameters
         xyz_he = self.xyz_he(edge_he_aggr).reshape(-1, 3)
         wpqr_he = self.wpqr_he(edge_he_aggr).reshape(-1, 3)
+        p_he = torch.concatenate([xyz_he, qexp(wpqr_he)], dim=-1)
 
-        return torch.cat((xyz_he, wpqr_he), 1), rel_pose_out, edge_index
+        processed_edge_index = edge_index.reshape(2, data.num_graphs, -1) % (num_edges // data.num_graphs)
+        processed_edge_index = processed_edge_index.permute(1, 0, 2)
+
+        p_ee = torch.concatenate([edge_attr[..., :3], qexp(edge_attr[..., 3:])], axis=-1)
+        p_ee = p_ee.reshape(data.num_graphs, -1, 7)
+
+        if self.theseus_layer is None:
+            self.theseus_layer = build_BA_Layer(
+                E_T_C_values=p_he,
+                C_T_C_values=p_R,
+                E_T_E_values=p_ee,
+                edge_index=processed_edge_index
+            )
+
+        theseus_inputs = {"E_T_C": th.SE3(x_y_z_quaternion=p_he)}
+
+        for i in range(processed_edge_index.shape[-1]):
+            edge_i, edge_j = (
+                processed_edge_index[0, 0, i],
+                processed_edge_index[0, 1, i],
+            )
+            theseus_inputs[f"C{edge_i}_T_C{edge_j}"] = th.SE3(
+                x_y_z_quaternion=p_R[:, i]
+            )
+            theseus_inputs[f"E{edge_i}_T_E{edge_j}"] = th.SE3(
+                x_y_z_quaternion=p_ee[:, i]
+            )
+
+        updated_vars, info = self.theseus_layer.forward(
+            input_tensors=theseus_inputs,
+            optimizer_kwargs={"track_best_solution": False, "verbose": False},
+        )
+
+        return updated_vars["E_T_C"], rel_pose_out, edge_index
