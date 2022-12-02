@@ -69,6 +69,7 @@ def build_BA_Layer(
     C_T_C_values: torch.Tensor,
     E_T_E_values: torch.Tensor,
     edge_index: torch.Tensor,
+    max_iterations: int = 1
 ) -> th.TheseusLayer:
 
     objective = th.Objective()
@@ -98,7 +99,7 @@ def build_BA_Layer(
 
     optimizer = th.GaussNewton(
         objective=objective,
-        max_iterations=10,
+        max_iterations=max_iterations,
         step_size=1,
         linearization_cls=th.SparseLinearization,
         linear_solver_cls=th.CholmodSparseSolver,

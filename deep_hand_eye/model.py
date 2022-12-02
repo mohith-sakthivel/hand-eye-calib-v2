@@ -222,10 +222,10 @@ class EdgeSelfAttention(nn.Module):
         value = unbatch(value.flatten(start_dim=-3), edge_graph_id)
 
         output = []
-        for q, k, v in zip(query, key, value):
-            attn = F.softmax(torch.matmul(q, k.T) / np.sqrt(2 * self.feat_dim), dim=-1)
-            output.append(torch.matmul(attn, v).view(-1, *feat_shape))
-        return torch.concat(output, dim=0)
+        attn = F.softmax(torch.matmul(query, key.permute(0, 2, 1)) / np.sqrt(2 * self.feat_dim), dim=-1)
+        output = torch.matmul(attn, value).view(-1, *feat_shape)
+
+        return output
 
 
 class GCNet(nn.Module):
@@ -240,7 +240,6 @@ class GCNet(nn.Module):
         self.pose_proj_dim = pose_proj_dim
         self.rel_pose = rel_pose
         self.edge_feat_dim = edge_feat_dim
-        self.theseus_layer = None
 
         # Setup the feature extractor
         self.feature_extractor = resnet34(pretrained=True)
@@ -344,7 +343,7 @@ class GCNet(nn.Module):
              *edge_feat_list), dim=-3)
         return out_feat
 
-    def forward(self, data):
+    def forward(self, data, opt_iterations: int = 1):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         x = self.feature_extractor(x)
         x = self.process_feat(x)
@@ -407,13 +406,13 @@ class GCNet(nn.Module):
         p_ee = torch.concatenate([edge_attr[..., :3], qexp(edge_attr[..., 3:])], axis=-1)
         p_ee = p_ee.reshape(data.num_graphs, -1, 7)
 
-        if self.theseus_layer is None:
-            self.theseus_layer = build_BA_Layer(
-                E_T_C_values=p_he,
-                C_T_C_values=p_R,
-                E_T_E_values=p_ee,
-                edge_index=processed_edge_index
-            )
+        theseus_layer = build_BA_Layer(
+            E_T_C_values=p_he,
+            C_T_C_values=p_R,
+            E_T_E_values=p_ee,
+            edge_index=processed_edge_index,
+            max_iterations=opt_iterations
+        )
 
         theseus_inputs = {"E_T_C": th.SE3(x_y_z_quaternion=p_he)}
 
@@ -429,7 +428,7 @@ class GCNet(nn.Module):
                 x_y_z_quaternion=p_ee[:, i]
             )
 
-        updated_vars, info = self.theseus_layer.forward(
+        updated_vars, info = theseus_layer.forward(
             input_tensors=theseus_inputs,
             optimizer_kwargs={"track_best_solution": False, "verbose": False},
         )

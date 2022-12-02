@@ -127,7 +127,7 @@ class Trainer(object):
 
                 data = data.to(self.device)
                 target_he, target_R = data.y, data.y_edge
-                pred_he, pred_R, _ = self.model(data)
+                pred_he, pred_R, _ = self.model(data, opt_iterations=1 if epoch > 5 else 0)
 
                 loss_he, loss_he_t, loss_he_q = self.train_criterion_he(pred_he, target_he)
                 loss_total = loss_he
@@ -159,7 +159,8 @@ class Trainer(object):
                         dataloader=self.test_dataloader,
                         iter_no=iter_no,
                         eval_rel_pose=self.config.rel_pose_coeff is not None,
-                        max_samples=self.config.eval_samples
+                        max_samples=self.config.eval_samples,
+                        opt_iterations=1 if epoch > 5 else 0
                     )
                     self.model.train()
                 iter_no += 1
@@ -168,7 +169,14 @@ class Trainer(object):
                 self.save_model()
 
     @torch.no_grad()
-    def eval(self, dataloader: DataLoader, iter_no: int, max_samples: int = 2000, eval_rel_pose: bool = True):
+    def eval(
+        self,
+        dataloader: DataLoader,
+        iter_no: int,
+        max_samples: int = 2000,
+        eval_rel_pose: bool = True,
+        opt_iterations: int = 0
+    ):
         self.model.eval()
 
         # loss functions
@@ -190,14 +198,14 @@ class Trainer(object):
 
             num_samples += data.num_graphs
             data = data.to(self.device)
-            output_he, output_R, _ = self.model(data)
+            output_he, output_R, _ = self.model(data, opt_iterations=opt_iterations)
             output_he = output_he.cpu().data.numpy()
             target_he = data.y.to('cpu').numpy()
 
             # normalize the predicted quaternions
-            q = [p_utils.homo_to_quat(p) for p in output_he]
+            q = [p_utils.homo_to_quat(p)[3:] for p in output_he]
             output_he = np.hstack((output_he[:, :3, 3], np.asarray(q)))
-            q = [p_utils.homo_to_quat(p) for p in target_he]
+            q = [p_utils.homo_to_quat(p)[3:] for p in target_he]
             target_he = np.hstack((target_he[:, :3, 3], np.asarray(q)))
 
             # calculate losses
