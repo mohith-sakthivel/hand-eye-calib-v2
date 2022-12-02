@@ -86,11 +86,13 @@ class Trainer(object):
         self.params = sum([np.prod(p.size()) for p in self.model_parameters])
 
         # Define loss
-        self.train_criterion_R = PoseCriterion(
-            beta=self.beta_loss_coeff,
-            gamma=self.gamma_loss_coeff,
-            learn_beta=True
-        ).to(self.device)
+        if self.config.rel_pose_coeff is not None:
+            self.train_criterion_R = PoseCriterion(
+                beta=self.beta_loss_coeff,
+                gamma=self.gamma_loss_coeff,
+                learn_beta=True
+            ).to(self.device)
+
         self.train_criterion_he = PoseCriterionSE3(
             beta=self.beta_loss_coeff,
             gamma=self.gamma_loss_coeff,
@@ -99,10 +101,11 @@ class Trainer(object):
 
         # Define optimizer
         param_list = [{'params': self.model.parameters()}]
-        if self.learn_loss_coeffs and hasattr(self.train_criterion_R, 'beta') \
-                and hasattr(self.train_criterion_R, 'gamma'):
-            param_list.append(
-                {'params': [self.train_criterion_R.beta, self.train_criterion_R.gamma]})
+        if self.learn_loss_coeffs:
+            param_list.append({'params': [self.train_criterion_he.beta, self.train_criterion_he.gamma]})
+
+            if self.config.rel_pose_coeff is not None:
+                param_list.append({'params': [self.train_criterion_R.beta, self.train_criterion_R.gamma]})
 
         self.optimizer = torch.optim.Adam(
             param_list, lr=self.lr,
