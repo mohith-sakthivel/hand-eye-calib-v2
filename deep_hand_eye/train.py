@@ -130,7 +130,7 @@ class Trainer(object):
 
                 data = data.to(self.device)
                 target_he, target_R = data.y, data.y_edge
-                pred_he, pred_R, _ = self.model(data, opt_iterations=1 if epoch > 5 else 0)
+                pred_he, pred_R, _ = self.model(data, opt_iterations=0 if epoch < 10 else 1)
 
                 loss_he, loss_he_t, loss_he_q = self.train_criterion_he(pred_he, target_he)
                 loss_total = loss_he
@@ -163,7 +163,7 @@ class Trainer(object):
                         iter_no=iter_no,
                         eval_rel_pose=self.config.rel_pose_coeff is not None,
                         max_samples=self.config.eval_samples,
-                        opt_iterations=1 if epoch > 5 else 0
+                        opt_iterations=0 if epoch < 10 else 1
                     )
                     self.model.train()
                 iter_no += 1
