@@ -40,7 +40,7 @@ class PoseConsistency(th.CostFunction):
         error = between(self.CA_T_CB, CA_T_CB_est).log_map(jacobians=log_jac)
 
         dlog = log_jac[0]
-        JList = [-dlog @ CA_T_CB_est.inverse().adjoint() + dlog,]
+        JList = [-dlog @ CA_T_CB_est.inverse().adjoint() + dlog]
 
         # # Method 2
         # EA_T_EB_est = compose(self.E_T_C, compose(self.CA_T_CB, self.E_T_C.inverse()))
@@ -69,7 +69,7 @@ def build_BA_Layer(
     C_T_C_values: torch.Tensor,
     E_T_E_values: torch.Tensor,
     edge_index: torch.Tensor,
-    max_iterations: int = 1
+    max_iterations: int = 1,
 ) -> th.TheseusLayer:
 
     objective = th.Objective()

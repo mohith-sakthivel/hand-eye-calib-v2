@@ -3,7 +3,7 @@ import open3d as o3d
 from scipy.spatial.transform import Rotation as R
 
 
-def vizualize_poses(poses, size=0.2):
+def vizualize_poses(poses: np.ndarray, size: float = 0.2):
     translation = poses[..., :3]
     rotation = np.array([R.from_quat(q).as_matrix() for q in poses[..., [4, 5, 6, 3]]])
     poses_homo = np.zeros((len(poses), 4, 4), dtype=float)

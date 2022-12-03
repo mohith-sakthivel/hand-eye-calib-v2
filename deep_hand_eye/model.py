@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Optional, Tuple
 
 import torch
 import theseus as th
@@ -6,17 +7,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
 
-from deep_hand_eye.resnet import resnet34
 from deep_hand_eye.utils import unbatch
-from deep_hand_eye.pose_utils import qexp
+from deep_hand_eye.resnet import resnet34
+from deep_hand_eye.pose_utils import qexp, xyz_quaternion_to_xyz_log_quaternion
 from deep_hand_eye.theseus_opt import build_BA_Layer
+
 
 class SimpleEdgeModel(nn.Module):
     """
     Network to perform autoregressive edge update during Neural message passing
     """
 
-    def __init__(self, node_channels, edge_in_channels, edge_out_channels):
+    def __init__(
+        self, node_channels: int, edge_in_channels: int, edge_out_channels: int
+    ):
         super().__init__()
         self.node_channels = node_channels
         self.edge_in_channels = edge_in_channels
@@ -28,7 +32,7 @@ class SimpleEdgeModel(nn.Module):
                 out_channels=edge_out_channels,
                 kernel_size=3,
                 stride=1,
-                padding=1
+                padding=1,
             ),
             nn.ReLU(inplace=True),
             nn.Conv2d(
@@ -36,12 +40,19 @@ class SimpleEdgeModel(nn.Module):
                 out_channels=edge_out_channels,
                 kernel_size=3,
                 stride=1,
-                padding=1)
+                padding=1,
+            ),
         )
 
-    def forward(self, source, target, edge_attr):
+    def forward(
+        self,
+        source: torch.Tensor,
+        target: torch.Tensor,
+        edge_attr: torch.Tensor
+    ) -> torch.Tensor:
         out = torch.cat([edge_attr, source, target], dim=1).contiguous()
         out = self.edge_cnn(out)
+
         return out
 
 
@@ -50,7 +61,7 @@ class AttentionBlock(nn.Module):
     Network to apply non-local attention
     """
 
-    def __init__(self, in_channels, N=8):
+    def __init__(self, in_channels: int, N: int = 8):
         super().__init__()
         self.N = N
         self.W_theta = nn.Conv2d(
@@ -69,17 +80,17 @@ class AttentionBlock(nn.Module):
             out_channels=in_channels // N,
             kernel_size=3,
             stride=1,
-            padding=1
+            padding=1,
         )
         self.W_g = nn.Conv2d(
             in_channels=in_channels // N,
             out_channels=in_channels,
             kernel_size=3,
             stride=1,
-            padding=1
+            padding=1,
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         out_channels = x.size(1)
 
@@ -96,6 +107,7 @@ class AttentionBlock(nn.Module):
         t = torch.matmul(W_ji, t)
         t = t.view(*t_shape)
         a_ij = self.W_g(t)
+
         return x + a_ij
 
 
@@ -104,16 +116,22 @@ class SimpleConvEdgeUpdate(MessagePassing):
     Network to pass messages and update the nodes
     """
 
-    def __init__(self, node_in_channels, node_out_channels,
-                 edge_in_channels, edge_out_channels, use_attention=True):
-        super().__init__(aggr='mean')
+    def __init__(
+        self,
+        node_in_channels: int,
+        node_out_channels: int,
+        edge_in_channels: int,
+        edge_out_channels: int,
+        use_attention: bool = True,
+    ):
+        super().__init__(aggr="mean")
 
         self.use_attention = use_attention
 
         self.edge_update_cnn = SimpleEdgeModel(
             node_channels=node_in_channels,
             edge_in_channels=edge_in_channels,
-            edge_out_channels=edge_out_channels
+            edge_out_channels=edge_out_channels,
         )
 
         self.msg_cnn = nn.Sequential(
@@ -122,7 +140,7 @@ class SimpleConvEdgeUpdate(MessagePassing):
                 out_channels=node_out_channels,
                 kernel_size=3,
                 padding=1,
-                stride=1
+                stride=1,
             ),
             nn.ReLU(inplace=True),
             nn.Conv2d(
@@ -130,31 +148,37 @@ class SimpleConvEdgeUpdate(MessagePassing):
                 out_channels=node_out_channels,
                 kernel_size=3,
                 padding=1,
-                stride=1
-            )
+                stride=1,
+            ),
         )
 
         self.node_update_cnn = nn.Sequential(
             nn.Conv2d(
                 in_channels=node_in_channels + node_out_channels,
-                out_channels=node_out_channels,
+                out_channels=node_in_channels,
                 kernel_size=3,
                 padding=1,
-                stride=1),
+                stride=1,
+            ),
             nn.ReLU(inplace=True),
             nn.Conv2d(
                 in_channels=node_out_channels,
                 out_channels=node_out_channels,
                 kernel_size=3,
                 padding=1,
-                stride=1
-            )
+                stride=1,
+            ),
         )
 
         if self.use_attention:
-            self.att = AttentionBlock(node_out_channels)
+            self.att = AttentionBlock(in_channels=node_out_channels)
 
-    def forward(self, x, edge_index, edge_attr):
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor
+    ) -> torch.Tensor:
         row, col = edge_index
         edge_attr = self.edge_update_cnn(x[row], x[col], edge_attr)
 
@@ -167,28 +191,53 @@ class SimpleConvEdgeUpdate(MessagePassing):
             x=x.view(num_nodes, -1),
             edge_attr=edge_attr.view(num_edges, -1),
             H=H,
-            W=W
+            W=W,
         )
         return out, edge_attr
 
-    def message(self, x_i, x_j, edge_attr, H, W):
+    def message(
+        self,
+        x_i: torch.Tensor,
+        x_j: torch.Tensor,
+        edge_attr: torch.Tensor,
+        H: int,
+        W: int,
+    ) -> torch.Tensor:
         num_edges = edge_attr.shape[0]
-        msg = self.msg_cnn(torch.cat(
-            [x_j.view(num_edges, -1, H, W), edge_attr.view(num_edges, -1, H, W)], dim=-3))
+        msg = self.msg_cnn(
+            torch.cat(
+                [x_j.view(num_edges, -1, H, W), edge_attr.view(num_edges, -1, H, W)],
+                dim=-3,
+            )
+        )
         if self.use_attention:
             msg = self.att(msg)
+
         return msg.view(num_edges, -1)
 
-    def update(self, aggr_out, x, H, W):
+    def update(
+        self, aggr_out: torch.Tensor, x: torch.Tensor, H: int, W: int
+    ) -> torch.Tensor:
         num_nodes = x.shape[0]
-        out = self.node_update_cnn(torch.cat(
-            [x.view(num_nodes, -1, H, W), aggr_out.view(num_nodes, -1, H, W)], dim=-3))
+        out = self.node_update_cnn(
+            torch.cat(
+                [x.view(num_nodes, -1, H, W), aggr_out.view(num_nodes, -1, H, W)],
+                dim=-3,
+            )
+        )
+
         return out
 
 
 class EdgeSelfAttention(nn.Module):
-
-    def __init__(self, input_dim, feat_dim, key_dim=None, query_dim=None, value_dim=None):
+    def __init__(
+        self,
+        input_dim: int,
+        feat_dim: int,
+        key_dim: Optional[int] = None,
+        query_dim: Optional[int] = None,
+        value_dim: Optional[int] = None,
+    ):
 
         super().__init__()
 
@@ -202,16 +251,17 @@ class EdgeSelfAttention(nn.Module):
         self.query_net = self.make_conv_block(input_dim, self.feat_dim, self.query_dim)
 
     @staticmethod
-    def make_conv_block(input_dim, feat_dim, output_dim):
+    def make_conv_block(input_dim: int, feat_dim: int, output_dim: int) -> nn.Module:
         block = nn.Sequential(
             nn.Conv2d(input_dim, feat_dim, kernel_size=3, stride=1, padding=0),
             nn.ReLU(inplace=True),
             nn.Conv2d(feat_dim, output_dim, kernel_size=3, stride=1, padding=0),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
         )
+
         return block
 
-    def forward(self, edge_feat, edge_graph_id):
+    def forward(self, edge_feat: torch.Tensor, edge_graph_id: torch.Tensor) -> torch.Tensor:
         query = self.query_net(edge_feat)
         key = self.key_net(edge_feat)
         value = self.value_net(edge_feat)
@@ -229,10 +279,15 @@ class EdgeSelfAttention(nn.Module):
 
 
 class GCNet(nn.Module):
-
-    def __init__(self, node_feat_dim=512, edge_feat_dim=512,
-                 gnn_recursion=2, droprate=0.0, pose_proj_dim=32,
-                 rel_pose=True) -> None:
+    def __init__(
+        self,
+        node_feat_dim: int = 512,
+        edge_feat_dim: int = 512,
+        gnn_recursion: int = 2,
+        droprate: float = 0.0,
+        pose_proj_dim: int = 32,
+        rel_pose: bool = True,
+    ) -> None:
 
         super().__init__()
         self.gnn_recursion = gnn_recursion
@@ -248,7 +303,7 @@ class GCNet(nn.Module):
             out_channels=node_feat_dim,
             kernel_size=3,
             stride=1,
-            padding=1
+            padding=1,
         )
 
         # Project relative robot displacement
@@ -259,12 +314,16 @@ class GCNet(nn.Module):
             out_channels=edge_feat_dim,
             kernel_size=3,
             stride=1,
-            padding=1
+            padding=1,
         )
 
         # Setup the message passing network
         self.gnn_layer = SimpleConvEdgeUpdate(
-            node_feat_dim, node_feat_dim, edge_feat_dim + pose_proj_dim, edge_feat_dim)
+            node_in_channels=node_feat_dim,
+            node_out_channels=node_feat_dim,
+            edge_in_channels=edge_feat_dim + pose_proj_dim,
+            edge_out_channels=edge_feat_dim,
+        )
 
         # Setup the relative pose regression networks
         if self.rel_pose:
@@ -272,22 +331,22 @@ class GCNet(nn.Module):
                 nn.Conv2d(
                     in_channels=edge_feat_dim,
                     out_channels=edge_feat_dim // 2,
-                    kernel_size=3
+                    kernel_size=3,
                 ),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(
                     in_channels=edge_feat_dim // 2,
                     out_channels=edge_feat_dim // 2,
-                    kernel_size=3
+                    kernel_size=3,
                 ),
-                nn.ReLU(inplace=True)
+                nn.ReLU(inplace=True),
             )
             self.xyz_R = nn.Conv2d(
                 in_channels=edge_feat_dim // 2,
                 out_channels=3,
                 kernel_size=3
             )
-            self.wpqr_R = nn.Conv2d(
+            self.log_quat_R = nn.Conv2d(
                 in_channels=edge_feat_dim // 2,
                 out_channels=3,
                 kernel_size=3
@@ -297,7 +356,7 @@ class GCNet(nn.Module):
         # Self-attention for edges to transfer information
         self.edge_self_attn_he = EdgeSelfAttention(
             input_dim=edge_feat_dim + pose_proj_dim + 2 * node_feat_dim,
-            feat_dim=edge_feat_dim // 2
+            feat_dim=edge_feat_dim // 2,
         )
 
         # Attention to combine information from all edges
@@ -306,7 +365,7 @@ class GCNet(nn.Module):
             out_channels=1,
             kernel_size=3,
             stride=1,
-            padding=0
+            padding=0,
         )
 
         # Setup Regression heads
@@ -315,7 +374,7 @@ class GCNet(nn.Module):
             out_channels=3,
             kernel_size=3
         )
-        self.wpqr_he = nn.Conv2d(
+        self.log_quat_he = nn.Conv2d(
             in_channels=edge_feat_dim // 2,
             out_channels=3,
             kernel_size=3
@@ -323,11 +382,17 @@ class GCNet(nn.Module):
 
         # Initialize networks
         init_modules = [
-            self.proj_rel_disp, self.process_feat, self.proj_init_edge, self.gnn_layer,
-            self.edge_self_attn_he, self.edge_attn_he, self.xyz_he, self.wpqr_he
+            self.proj_rel_disp,
+            self.process_feat,
+            self.proj_init_edge,
+            self.gnn_layer,
+            self.edge_self_attn_he,
+            self.edge_attn_he,
+            self.xyz_he,
+            self.log_quat_he,
         ]
         if self.rel_pose:
-            init_modules.extend([self.edge_R, self.xyz_R, self.wpqr_R])
+            init_modules.extend([self.edge_R, self.xyz_R, self.log_quat_R])
 
         for m in init_modules:
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
@@ -335,22 +400,38 @@ class GCNet(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias.data, 0)
 
-    def join_node_edge_feat(self, node_feat, edge_index, edge_feat_list):
+    def join_node_edge_feat(
+        self,
+        node_feat: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_feat_list: torch.Tensor,
+    ) -> torch.Tensor:
         # Join node features of a corresponding edge
         out_feat = torch.cat(
-            (node_feat[edge_index[0], ...],
-             node_feat[edge_index[1], ...],
-             *edge_feat_list), dim=-3)
+            (
+                node_feat[edge_index[0], ...],
+                node_feat[edge_index[1], ...],
+                *edge_feat_list,
+            ),
+            dim=-3,
+        )
         return out_feat
 
-    def forward(self, data, opt_iterations: int = 1):
+    def forward(
+        self,
+        data: torch.Tensor,
+        opt_iterations: int = 1
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        edge_attr = xyz_quaternion_to_xyz_log_quaternion(edge_attr)
         x = self.feature_extractor(x)
         x = self.process_feat(x)
 
         # Compute edge features
         rel_disp_feat = F.relu(self.proj_rel_disp(edge_attr), inplace=True)
-        rel_disp_feat = rel_disp_feat.view(*rel_disp_feat.shape, 1, 1).expand(-1, -1, *x.shape[-2:])
+        rel_disp_feat = rel_disp_feat.view(*rel_disp_feat.shape, 1, 1).expand(
+            -1, -1, *x.shape[-2:]
+        )
         edge_node_feat = self.join_node_edge_feat(x, edge_index, [rel_disp_feat])
         edge_feat = F.relu(self.proj_init_edge(edge_node_feat), inplace=True)
 
@@ -361,32 +442,38 @@ class GCNet(nn.Module):
             x = F.relu(x)
             edge_feat = F.relu(edge_feat)
 
-        # Drop node and edge features if necessary
+        # Drop edge features if necessary
         if self.droprate > 0:
-            # x = F.dropout(x, p=self.droprate, training=self.training)
-            edge_feat = F.dropout(
-                edge_feat, p=self.droprate, training=self.training)
+            edge_feat = F.dropout(edge_feat, p=self.droprate, training=self.training)
 
         # Predict the relative pose between images
         if self.rel_pose:
             edge_R_feat = self.edge_R(edge_feat)
             xyz_R = self.xyz_R(edge_R_feat).squeeze()
-            wpqr_R = self.wpqr_R(edge_R_feat).squeeze()
-            rel_pose_out = torch.cat((xyz_R, wpqr_R), 1)
-            p_R = torch.concatenate([xyz_R, qexp(wpqr_R)], dim=-1).reshape(data.num_graphs, -1, 7)
+            log_quat_R = self.log_quat_R(edge_R_feat).squeeze()
+            rel_pose_out = torch.cat((xyz_R, log_quat_R), dim=-1)
+            C_T_C_pred = torch.cat((xyz_R, qexp(log_quat_R)), dim=-1).reshape(
+                data.num_graphs, -1, 7
+            )
         else:
             rel_pose_out = None
 
         # Process edge features for regressing hand-eye parameters
-        edge_he_feat = self.join_node_edge_feat(x, edge_index, [edge_feat, rel_disp_feat])
+        edge_he_feat = self.join_node_edge_feat(
+            x, edge_index, [edge_feat, rel_disp_feat]
+        )
         # Find the graph id of each edge using the source node
         edge_graph_ids = data.batch[data.edge_index[0].cpu().numpy()]
         # Perform self-attention of edge features
         edge_he_feat = self.edge_self_attn_he(edge_he_feat, edge_graph_ids)
 
         # Calculate the attention weight over the edges
-        edge_he_logits = self.edge_attn_he(edge_he_feat).squeeze().repeat(data.num_graphs, 1)
-        num_graphs = torch.arange(0, data.num_graphs).view(-1, 1).to(edge_graph_ids.device)
+        edge_he_logits = (
+            self.edge_attn_he(edge_he_feat).squeeze().repeat(data.num_graphs, 1)
+        )
+        num_graphs = (
+            torch.arange(0, data.num_graphs).view(-1, 1).to(edge_graph_ids.device)
+        )
         edge_he_logits[num_graphs != edge_graph_ids] = -torch.inf
         edge_he_attn = F.softmax(edge_he_logits, dim=-1)
 
@@ -397,35 +484,41 @@ class GCNet(nn.Module):
 
         # Predict the hand-eye parameters
         xyz_he = self.xyz_he(edge_he_aggr).reshape(-1, 3)
-        wpqr_he = self.wpqr_he(edge_he_aggr).reshape(-1, 3)
-        p_he = torch.concatenate([xyz_he, qexp(wpqr_he)], dim=-1)
+        log_quat_he = self.log_quat_he(edge_he_aggr).reshape(-1, 3)
+        E_T_C_pred = torch.cat([xyz_he, qexp(log_quat_he)], dim=-1)
 
-        processed_edge_index = edge_index.reshape(2, data.num_graphs, -1) % (num_edges // data.num_graphs)
-        processed_edge_index = processed_edge_index.permute(1, 0, 2)
+        # Perform differentiable non-linear optimization
+        processed_edge_index = edge_index.reshape(2, data.num_graphs, -1)
+        edges_per_graph = num_edges // data.num_graphs
+        processed_edge_index = processed_edge_index.permute(1, 0, 2) % edges_per_graph
 
-        p_ee = torch.concatenate([edge_attr[..., :3], qexp(edge_attr[..., 3:])], axis=-1)
-        p_ee = p_ee.reshape(data.num_graphs, -1, 7)
+        E_T_E_gt = torch.cat(
+            [edge_attr[..., :3], qexp(edge_attr[..., 3:])], axis=-1
+        )
+        E_T_E_gt = E_T_E_gt.reshape(data.num_graphs, -1, 7)
 
         theseus_layer = build_BA_Layer(
-            E_T_C_values=p_he,
-            C_T_C_values=p_R,
-            E_T_E_values=p_ee,
+            E_T_C_values=E_T_C_pred,
+            C_T_C_values=C_T_C_pred,
+            E_T_E_values=E_T_E_gt,
             edge_index=processed_edge_index,
-            max_iterations=opt_iterations
+            max_iterations=opt_iterations,
         )
 
-        theseus_inputs = {"E_T_C": th.SE3(x_y_z_quaternion=p_he)}
+        theseus_inputs = {"E_T_C": th.SE3(x_y_z_quaternion=E_T_C_pred)}
 
         for i in range(processed_edge_index.shape[-1]):
             edge_i, edge_j = (
                 processed_edge_index[0, 0, i],
                 processed_edge_index[0, 1, i],
             )
+            # Create poses for camera-to-camera transforms
             theseus_inputs[f"C{edge_i}_T_C{edge_j}"] = th.SE3(
-                x_y_z_quaternion=p_R[:, i]
+                x_y_z_quaternion=C_T_C_pred[:, i]
             )
+            # Create poses for transforms between robot end-effector positions
             theseus_inputs[f"E{edge_i}_T_E{edge_j}"] = th.SE3(
-                x_y_z_quaternion=p_ee[:, i]
+                x_y_z_quaternion=E_T_E_gt[:, i]
             )
 
         updated_vars, info = theseus_layer.forward(

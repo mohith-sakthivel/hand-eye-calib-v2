@@ -4,13 +4,13 @@ from scipy.spatial.transform import Rotation as R
 
 from torch_geometric.loader import DataLoader
 
-import deep_hand_eye.pose_utils as p_utils
+from deep_hand_eye.pose_utils import invert_transformation_matrix
 from deep_hand_eye.dataset import MVSDataset
 
 
 def test_dataset(test_size=64):
 
-    dataset = MVSDataset(max_rot_offset=45)
+    dataset = MVSDataset(image_folder="data/DTU_MVS_2014/Rectified/train/")
     train_loader = DataLoader(dataset, batch_size=test_size, shuffle=True)
     data = next(iter(train_loader))
     print("Starting verificaiton...")
@@ -18,33 +18,26 @@ def test_dataset(test_size=64):
     for n in tqdm(range(data.num_graphs)):
 
         hand_eye = data[n].y.squeeze()
-        hand_eye_quat = p_utils.qexp(hand_eye[3:])[[1, 2, 3, 0]]
-        hand_eye_homogenous = R.from_quat(hand_eye_quat).as_matrix()
-        hand_eye_translate = np.array(hand_eye[:3]).reshape(-1, 1)
-        hand_eye_homogenous = np.hstack(
-            [hand_eye_homogenous, hand_eye_translate])
-        hand_eye_homogenous = np.vstack([hand_eye_homogenous, [0, 0, 0, 1]])
+        E_T_C = np.vstack([hand_eye, [0, 0, 0, 1]])
 
         for i, (from_idx, to_idx) in enumerate(data[n].edge_index.T):
 
-            rel_ee_transform = data[n].edge_attr[i]
-            rel_cam_transform = data[n].y_edge[i]
+            E_T_E_transform = data[n].edge_attr[i]
+            C_T_C_transform = data[n].y_edge[i]
 
-            ee_quat = p_utils.qexp(rel_ee_transform[3:])[[1, 2, 3, 0]]
-            ee_homogenous = R.from_quat(ee_quat).as_matrix()
-            ee_translate = np.array(rel_ee_transform[:3]).reshape(-1, 1)
-            ee_homogenous = np.hstack([ee_homogenous, ee_translate])
-            ee_homogenous = np.vstack([ee_homogenous, [0, 0, 0, 1]])
+            E_T_E_quat = E_T_E_transform[3:][[1, 2, 3, 0]]
+            E_T_E_rotation_matrix = R.from_quat(E_T_E_quat).as_matrix()
+            E_T_E_translate = np.array(E_T_E_transform[:3]).reshape(-1, 1)
+            E_T_E = np.hstack([E_T_E_rotation_matrix, E_T_E_translate])
+            E_T_E = np.vstack([E_T_E, [0, 0, 0, 1]])
 
-            cam_quat = p_utils.qexp(rel_cam_transform[3:])[[1, 2, 3, 0]]
-            cam_homogenous = R.from_quat(cam_quat).as_matrix()
-            cam_translate = np.array(rel_cam_transform[:3]).reshape(-1, 1)
-            cam_homogenous = np.hstack([cam_homogenous, cam_translate])
-            cam_homogenous = np.vstack([cam_homogenous, [0, 0, 0, 1]])
+            C_T_C_quat = C_T_C_transform[3:][[1, 2, 3, 0]]
+            C_T_C_rotation_matrix = R.from_quat(C_T_C_quat).as_matrix()
+            C_T_C_translate = np.array(C_T_C_transform[:3]).reshape(-1, 1)
+            C_T_C = np.hstack([C_T_C_rotation_matrix, C_T_C_translate])
+            C_T_C = np.vstack([C_T_C, [0, 0, 0, 1]])
 
-            err_residuals = cam_homogenous - \
-                p_utils.invert_homo(
-                    hand_eye_homogenous) @ ee_homogenous @ hand_eye_homogenous
+            err_residuals = C_T_C - invert_transformation_matrix(E_T_C) @ E_T_E @ E_T_C
             assert np.all(np.abs(err_residuals) < 1e-5)
 
 

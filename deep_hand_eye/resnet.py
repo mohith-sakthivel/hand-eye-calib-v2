@@ -4,11 +4,16 @@ import torch
 import torch.nn.functional as F
 
 from torchvision._internally_replaced_utils import load_state_dict_from_url
-from torchvision.models.resnet import ResNet, BasicBlock, Bottleneck, _resnet, model_urls
+from torchvision.models.resnet import (
+    ResNet,
+    BasicBlock,
+    Bottleneck,
+    _resnet,
+    model_urls,
+)
 
 
 class ConvOutResNet(ResNet):
-
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         # See note [TorchScript super()]
         x = self.conv1(x)
@@ -34,11 +39,10 @@ def _resnet(
 ) -> ConvOutResNet:
     model = ConvOutResNet(block, layers, **kwargs)
     if pretrained:
-        state_dict = load_state_dict_from_url(
-            model_urls[arch], progress=progress)
+        state_dict = load_state_dict_from_url(model_urls[arch], progress=progress)
         model.load_state_dict(state_dict)
-    delattr(model, 'avgpool')
-    delattr(model, 'fc')
+    delattr(model, "avgpool")
+    delattr(model, "fc")
     return model
 
 

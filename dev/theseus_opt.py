@@ -5,7 +5,7 @@ import theseus as th
 
 from typing import List, Optional, Tuple
 from theseus.geometry import compose, local, between
-from deep_hand_eye.pose_utils import quaternion_angular_error, homo_to_quat
+from deep_hand_eye.pose_utils import quaternion_angular_error, rotation_matrix_to_quaternion
 
 
 DEVICE = "cuda"
@@ -188,7 +188,7 @@ def run():
     trans_true = batch_data["E_T_C_true"][:, :3].cpu().numpy()
 
     quat_optimized = info.best_solution["E_T_C"].cpu().numpy()
-    quat_optimized = np.array([homo_to_quat(T)[3:] for T in quat_optimized])
+    quat_optimized = np.array([rotation_matrix_to_quaternion(T[:3, :3]) for T in quat_optimized])
     quat_pred = batch_data["E_T_C_pred"][:, 3:].cpu().numpy()
     quat_true = batch_data["E_T_C_true"][:, 3:].cpu().numpy()
 
