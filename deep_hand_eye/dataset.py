@@ -69,6 +69,7 @@ class MVSDataset(Dataset):
 
         # Mapping between idx and unique images
         self.idx_to_img_mapping = self.idx_to_img_map()
+        print("Dataset initialized...")
 
     def __len__(self) -> int:
         return len(self.idx_to_img_mapping)
@@ -236,7 +237,6 @@ class MVSDataset(Dataset):
             img_names = os.listdir(scan_dir)
             for img_idx in range(len(img_names)):
                 img_list.append((scan_idx, img_idx))
-        print("Dataset indices intialized...")
 
         return img_list
 

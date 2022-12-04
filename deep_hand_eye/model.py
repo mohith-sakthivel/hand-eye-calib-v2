@@ -263,7 +263,6 @@ class EdgeSelfAttention(nn.Module):
         key = unbatch(key.flatten(start_dim=-3), edge_graph_id)
         value = unbatch(value.flatten(start_dim=-3), edge_graph_id)
 
-        output = []
         attn = F.softmax(
             torch.matmul(query, key.permute(0, 2, 1)) / np.sqrt(2 * self.feat_dim),
             dim=-1,

@@ -13,6 +13,7 @@ from deep_hand_eye.model import GCNet
 from deep_hand_eye.utils import AttrDict
 from deep_hand_eye.dataset import MVSDataset
 from deep_hand_eye.losses import PoseCriterion
+from deep_hand_eye.eval.evaluate import eval
 from deep_hand_eye.pose_utils import (
     qexp,
     quaternion_angular_error,
@@ -209,12 +210,16 @@ class Trainer(object):
                         )
 
                 if iter_no % self.config.eval_freq == 0:
-                    self.eval(
+                    _ = eval(
+                        model=self.model,
                         dataloader=self.test_dataloader,
-                        iter_no=iter_no,
+                        device=self.device,
+                        num_samples=self.config.eval_samples,
                         eval_rel_pose=self.config.rel_pose_coeff is not None,
-                        max_samples=self.config.eval_samples,
                         opt_iterations=0 if epoch < 10 else 1,
+                        iter_no=iter_no,
+                        tb_writer=self.tb_writer
+
                     )
                     self.model.train()
                 iter_no += 1

@@ -12,7 +12,7 @@ from torch_geometric.loader import DataLoader
 import deep_hand_eye.pose_utils as p_utils
 from deep_hand_eye.utils import AttrDict
 from deep_hand_eye.dataset import MVSDataset
-from deep_hand_eye.viz_utils import vizualize_poses
+from deep_hand_eye.eval.utils import vizualize_poses
 
 
 MODEL_PATH = 'models/2022-10-17--19-11-31/model.pt'
