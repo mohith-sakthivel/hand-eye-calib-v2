@@ -45,10 +45,7 @@ class SimpleEdgeModel(nn.Module):
         )
 
     def forward(
-        self,
-        source: torch.Tensor,
-        target: torch.Tensor,
-        edge_attr: torch.Tensor
+        self, source: torch.Tensor, target: torch.Tensor, edge_attr: torch.Tensor
     ) -> torch.Tensor:
         out = torch.cat([edge_attr, source, target], dim=1).contiguous()
         out = self.edge_cnn(out)
@@ -65,14 +62,10 @@ class AttentionBlock(nn.Module):
         super().__init__()
         self.N = N
         self.W_theta = nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=in_channels // N,
-            kernel_size=3
+            in_channels=in_channels, out_channels=in_channels // N, kernel_size=3
         )
         self.W_phi = nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=in_channels // N,
-            kernel_size=3
+            in_channels=in_channels, out_channels=in_channels // N, kernel_size=3
         )
 
         self.W_f = nn.Conv2d(
@@ -174,10 +167,7 @@ class SimpleConvEdgeUpdate(MessagePassing):
             self.att = AttentionBlock(in_channels=node_out_channels)
 
     def forward(
-        self,
-        x: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_attr: torch.Tensor
+        self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor
     ) -> torch.Tensor:
         row, col = edge_index
         edge_attr = self.edge_update_cnn(x[row], x[col], edge_attr)
@@ -261,7 +251,9 @@ class EdgeSelfAttention(nn.Module):
 
         return block
 
-    def forward(self, edge_feat: torch.Tensor, edge_graph_id: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, edge_feat: torch.Tensor, edge_graph_id: torch.Tensor
+    ) -> torch.Tensor:
         query = self.query_net(edge_feat)
         key = self.key_net(edge_feat)
         value = self.value_net(edge_feat)
@@ -272,7 +264,10 @@ class EdgeSelfAttention(nn.Module):
         value = unbatch(value.flatten(start_dim=-3), edge_graph_id)
 
         output = []
-        attn = F.softmax(torch.matmul(query, key.permute(0, 2, 1)) / np.sqrt(2 * self.feat_dim), dim=-1)
+        attn = F.softmax(
+            torch.matmul(query, key.permute(0, 2, 1)) / np.sqrt(2 * self.feat_dim),
+            dim=-1,
+        )
         output = torch.matmul(attn, value).view(-1, *feat_shape)
 
         return output
@@ -342,14 +337,10 @@ class GCNet(nn.Module):
                 nn.ReLU(inplace=True),
             )
             self.xyz_R = nn.Conv2d(
-                in_channels=edge_feat_dim // 2,
-                out_channels=3,
-                kernel_size=3
+                in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
             )
             self.log_quat_R = nn.Conv2d(
-                in_channels=edge_feat_dim // 2,
-                out_channels=3,
-                kernel_size=3
+                in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
             )
 
         # Setup the hand-eye pose regression networks
@@ -370,14 +361,10 @@ class GCNet(nn.Module):
 
         # Setup Regression heads
         self.xyz_he = nn.Conv2d(
-            in_channels=edge_feat_dim // 2,
-            out_channels=3,
-            kernel_size=3
+            in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
         )
         self.log_quat_he = nn.Conv2d(
-            in_channels=edge_feat_dim // 2,
-            out_channels=3,
-            kernel_size=3
+            in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
         )
 
         # Initialize networks
@@ -418,9 +405,7 @@ class GCNet(nn.Module):
         return out_feat
 
     def forward(
-        self,
-        data: torch.Tensor,
-        opt_iterations: int = 1
+        self, data: torch.Tensor, opt_iterations: int = 1
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         edge_attr = xyz_quaternion_to_xyz_log_quaternion(edge_attr)
@@ -488,42 +473,48 @@ class GCNet(nn.Module):
         E_T_C_pred = torch.cat([xyz_he, qexp(log_quat_he)], dim=-1)
 
         # Perform differentiable non-linear optimization
-        processed_edge_index = edge_index.reshape(2, data.num_graphs, -1)
-        edges_per_graph = num_edges // data.num_graphs
-        processed_edge_index = processed_edge_index.permute(1, 0, 2) % edges_per_graph
-
-        E_T_E_gt = torch.cat(
-            [edge_attr[..., :3], qexp(edge_attr[..., 3:])], axis=-1
-        )
-        E_T_E_gt = E_T_E_gt.reshape(data.num_graphs, -1, 7)
-
-        theseus_layer = build_BA_Layer(
-            E_T_C_values=E_T_C_pred,
-            C_T_C_values=C_T_C_pred,
-            E_T_E_values=E_T_E_gt,
-            edge_index=processed_edge_index,
-            max_iterations=opt_iterations,
-        )
-
-        theseus_inputs = {"E_T_C": th.SE3(x_y_z_quaternion=E_T_C_pred)}
-
-        for i in range(processed_edge_index.shape[-1]):
-            edge_i, edge_j = (
-                processed_edge_index[0, 0, i],
-                processed_edge_index[0, 1, i],
-            )
-            # Create poses for camera-to-camera transforms
-            theseus_inputs[f"C{edge_i}_T_C{edge_j}"] = th.SE3(
-                x_y_z_quaternion=C_T_C_pred[:, i]
-            )
-            # Create poses for transforms between robot end-effector positions
-            theseus_inputs[f"E{edge_i}_T_E{edge_j}"] = th.SE3(
-                x_y_z_quaternion=E_T_E_gt[:, i]
+        if opt_iterations > 0:
+            processed_edge_index = edge_index.reshape(2, data.num_graphs, -1)
+            edges_per_graph = num_edges // data.num_graphs
+            processed_edge_index = (
+                processed_edge_index.permute(1, 0, 2) % edges_per_graph
             )
 
-        updated_vars, info = theseus_layer.forward(
-            input_tensors=theseus_inputs,
-            optimizer_kwargs={"track_best_solution": False, "verbose": False},
-        )
+            E_T_E_gt = torch.cat(
+                [edge_attr[..., :3], qexp(edge_attr[..., 3:])], axis=-1
+            )
+            E_T_E_gt = E_T_E_gt.reshape(data.num_graphs, -1, 7)
+
+            theseus_layer = build_BA_Layer(
+                E_T_C_values=E_T_C_pred,
+                C_T_C_values=C_T_C_pred,
+                E_T_E_values=E_T_E_gt,
+                edge_index=processed_edge_index,
+                max_iterations=opt_iterations,
+            )
+
+            theseus_inputs = {"E_T_C": th.SE3(x_y_z_quaternion=E_T_C_pred)}
+
+            for i in range(processed_edge_index.shape[-1]):
+                edge_i, edge_j = (
+                    processed_edge_index[0, 0, i],
+                    processed_edge_index[0, 1, i],
+                )
+                # Create poses for camera-to-camera transforms
+                theseus_inputs[f"C{edge_i}_T_C{edge_j}"] = th.SE3(
+                    x_y_z_quaternion=C_T_C_pred[:, i]
+                )
+                # Create poses for transforms between robot end-effector positions
+                theseus_inputs[f"E{edge_i}_T_E{edge_j}"] = th.SE3(
+                    x_y_z_quaternion=E_T_E_gt[:, i]
+                )
+
+            updated_vars, info = theseus_layer.forward(
+                input_tensors=theseus_inputs,
+                optimizer_kwargs={"track_best_solution": False, "verbose": False},
+            )
+
+        else:
+            updated_vars = {"E_T_C": th.SE3(x_y_z_quaternion=E_T_C_pred).to_matrix()}
 
         return updated_vars["E_T_C"], rel_pose_out, edge_index
