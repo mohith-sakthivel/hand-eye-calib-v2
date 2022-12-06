@@ -5,11 +5,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
+import open3d as o3d
 
 import torch
 from torch_geometric.loader import DataLoader
 
-from deep_hand_eye.pose_utils import quaternion_angular_error, qexp, quaternion_to_axis_angle
+from deep_hand_eye.pose_utils import quaternion_angular_error, qexp, quaternion_to_axis_angle, transformation_matrix_to_xyz_quaternion
 from deep_hand_eye.utils import AttrDict
 from deep_hand_eye.dataset import MVSDataset
 from deep_hand_eye.viz_utils import vizualize_poses
@@ -24,7 +25,11 @@ config.log_dir = Path("eval")
 config.max_samples = 20
 config.data_path = "data/DTU_MVS_2014/Rectified/test/"
 config.model_dir = Path("models")
-config.model_name = "2022-10-17--19-11-31" # /model.py
+config.model_name = "2022-10-17--19-11-31"
+config.num_hist_bins = 125
+config.num_images_per_graph = 5
+config,show_images = True
+# Add config.model_checkpoint here after it's been implemented in train.py
 
 
 def seed_everything(seed: int):
@@ -50,159 +55,171 @@ class ModelEval(object):
             num_workers=config.num_workers
         )
 
+        self.trans_criterion = lambda t_pred, t_gt: np.linalg.norm(t_pred - t_gt, axis=-1)
+        self.quat_criterion = quaternion_angular_error
+
+    @staticmethod
+    def get_stats(qty):
+        return np.median(qty, axis=0), np.mean(qty, axis=0), np.max(qty, axis=0)
     
-    def eval():
+    def plot_statistics(self, trans_error_he, quat_error_he, trans_error_rel, quat_error_rel):
+        error_names = ["Hand-eye Translational Error", "Hand-eye Rotational Error", 
+                "Relative Translational Error", "Relative Rotational Error"]
+        errors = [trans_error_he, quat_error_he, trans_error_rel, quat_error_rel]
+
+        fig, axs = plt.subplots(2, 2, tight_layout=True)
+        for row in range(2):
+            for col in range(2):
+                idx = row * 2 + col
+                unit = "deg" if col == 1 else "mm"
+                axs[row, col].hist(1000 * errors[idx], bins=self.config.num_hist_bins)
+                axs[row, col].set_title(error_names[idx])
+                axs[row, col].set_xlabel(f'Error [{unit}]')
+                axs[row, col].set_ylabel('Number of Instances')
+                axs[row, col].minorticks_on()
+
+                mean, median, max = ModelEval.get_stats(errors[idx])
+                print(f'{error_names[idx]}: \n'
+                f'\t median {median:3.2f} {unit} \n'
+                f'\t mean {mean:3.2f} {unit} \n'
+                f'\t max {max:3.2f} {unit} \n'
+        
+        plt.savefig(str(self.config.log_dir / f"{self.config.model_name}_histogram.jpg"))
+        if self.config.show_images:
+            plt.show()
+    
+    @staticmethod
+    def maximum_axis_difference(axes):
+        max_axis_diff = 0
+        for i in range(axes.shape[0]):
+            for j in np.arange(i+1, axes.shape[0]):
+                axis_diff = np.abs(np.arccos(np.dot(axes[i], axes[j])))
+                if axis_diff > max_axis_diff:
+                    max_axis_diff = axis_diff
+        return max_axis_diff
+
+    @staticmethod
+    def smallest_enclosing_sphere(points):
+        # Surprisingly challenging lol
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        oriented_bb = pcd.get_oriented_bounding_box()
+        return np.linalg.norm(oriented_bb.extent)
+
+    @torch.no_grad()
+    def eval(self):
         self.model.eval()
 
-        
+        trans_error_he = []
+        quat_error_he = []
+        trans_error_rel = []
+        quat_error_rel = []
+        count = 0
 
+        # inference loop
+        for data in tqdm(self.test_dataloader, total=self.config.max_samples // self.config.batch_size):
+            data = data.to(config.device)
+            output_he, output_rel, _ = self.model(data)
 
-@torch.no_grad()
-def run_eval():
+            # Move to local CPU
+            output_he = output_he.cpu().numpy()
+            target_he = data.y.cpu().numpy()
+            output_rel = output_rel.cpu().numpy()
+            target_rel = data.y_edge.cpu().numpy()
 
-    
+            # Generate poses from predictions and label for hand-eye pose
+            output_he = np.array([transformation_matrix_to_xyz_quaternion(he_pose) for he_pose in output_he])
+            target_he = np.array([transformation_matrix_to_xyz_quaternion(he_pose) for he_pose in target_he])
 
-    # loss functions
-    t_criterion = lambda t_pred, t_gt: np.linalg.norm(t_pred - t_gt, axis=-1)
-    q_criterion = quaternion_angular_error
+            # Calculate hand-eye losses
+            trans_error_he_batch = self.trans_criterion(output_he[:, :3], target_he[:, :3])
+            quat_error_he_batch = self.quat_criterion(output_he[:, 3:], target_he[:, 3:])
 
-    t_loss_he = []
-    q_loss_he = []
-    t_loss_R = []
-    q_loss_R = []
-    count = 0
+            # Generate poses from predictions and label for relative poses
+            output_rel_quat = [qexp(p[3:]) for p in output_rel]
+            output_rel = np.hstack((output_rel[:, :3], np.asarray(output_rel_quat)))
+            target_rel_quat = [qexp(p[3:]) for p in target_rel]
+            target_rel = np.hstack((target_rel[:, :3], np.asarray(target_rel_quat)))
 
-    # inference loop
-    for data in tqdm(test_dataloader, total=MAX_SAMPLES // config.batch_size):
-        data = data.to(config.device)
-        output_he, output_R, _ = model(data)
+            # Compute translational and angular error
+            trans_error_rel_batch = self.trans_criterion(output_rel[:, :3], target_rel[:, :3])
+            quat_error_rel_batch = self.quat_criterion(output_rel[:, 3:], target_rel[:, 3:])
 
-        output_he = output_he.cpu().numpy()
-        target_he = data.y.cpu().numpy()
-        output_R = output_R.cpu().numpy()
-        target_R = data.y_edge.cpu().numpy()
+            # Aggregate errors
+            trans_error_he.append(trans_error_he_batch)
+            quat_error_he.append(quat_error_he_batch)
+            trans_error_rel.append(trans_error_rel_batch)
+            quat_error_rel.append(quat_error_rel_batch)
 
-        # Generate poses from predictions and label for hand-eye pose
-        q = [qexp(p[3:]) for p in output_he]
-        output_he = np.hstack((output_he[:, :3], np.asarray(q)))
-        q = [qexp(p[3:]) for p in target_he]
-        target_he = np.hstack((target_he[:, :3], np.asarray(q)))
+            # ?
+            edge_batch_idx = data.batch[data.edge_index[0]].cpu().numpy()
+            edge_first_nodes = data.edge_index[0].cpu().numpy()
 
-        # Calculate hand-eye losses
-        t_loss_he_batch = t_criterion(output_he[:, :3], target_he[:, :3])
-        q_loss_he_batch = q_criterion(output_he[:, 3:], target_he[:, 3:])
+            # Visualization of Results
+            for graph_id in range(data.num_graphs):
+                img_list = data.raw_images[graph_id]
+                count += 1
 
-        # Generate poses from predictions and label for relative poses
-        q = [qexp(p[3:]) for p in output_R]
-        output_R = np.hstack((output_R[:, :3], np.asarray(q)))
-        q = [qexp(p[3:]) for p in target_R]
-        target_R = np.hstack((target_R[:, :3], np.asarray(q)))
+                edge_mask = edge_batch_idx == graph_id
+                rel_pos_error = trans_error_rel_batch[edge_mask].mean(axis=0) * 1000
+                rel_rot_error = quat_error_rel_batch[edge_mask].mean(axis=0)
 
-        t_loss_R_batch = t_criterion(output_R[:, :3], target_R[:, :3])
-        q_loss_R_batch = q_criterion(output_R[:, 3:], target_R[:, 3:])
+                # Compute maximum axis angle deviation
+                input_rel_rotation_axes = [q[1:] / np.linalg.norm(q[1:]) for q in target_rel[edge_mask, 3:]]
+                max_axis_diff = maximum_axis_difference(np.array(input_rel_rotation_axes))
 
-        t_loss_he.append(t_loss_he_batch)
-        q_loss_he.append(q_loss_he_batch)
-        t_loss_R.append(t_loss_R_batch)
-        q_loss_R.append(q_loss_R_batch)
+                # Compute minimum sphere size
+                min_sphere_radius = smallest_enclosing_sphere(target_rel[edge_mask, :3])
 
-        edge_batch_idx = data.batch[data.edge_index[0]].cpu().numpy()
-        edge_first_nodes = data.edge_index[0].cpu().numpy()
+                num_rows = np.floor(np.sqrt(len(img_list)))
+                num_cols = np.ceil(len(img_list)/num_rows)
 
-        # Visualization of Results
-        for graph_id in range(data.num_graphs):
-            img_list = data.raw_images[graph_id] 
-            count += 1
+                # Add logic to make custom # nodes per image, currently doesn't work
+                rows = list()
+                for row in range(num_rows):
+                    row = list()
+                    for col in range(num_cols):
+                        idx = row * num_cols + num_cols
+                        row.append(cv2.resize(img_list[idx], (400, 300)))
+                    rows.append(cv2.hconcat(row))
+                cv2.vconcat(rows)
 
-            axis, angle = quaternion_to_axis_angle(target_he[graph_id, 3:], in_degrees=True)
-            edge_mask = edge_batch_idx == graph_id
-            rel_pos_error = t_loss_R_batch[edge_mask].mean(axis=0) * 1000
-            rel_rot_error = q_loss_R_batch[edge_mask].mean(axis=0)
+                axis, angle = quaternion_to_axis_angle(target_he[graph_id, 3:], in_degrees=True)
 
-            row1 = cv2.hconcat([cv2.resize(img_list[0], (600, 450)), cv2.resize(img_list[1], (600, 450)), cv2.resize(img_list[2], (600, 450))])
-            row2 = cv2.hconcat([cv2.resize(img_list[3], (600, 450)), cv2.resize(img_list[4], (600, 450)), np.zeros_like(cv2.resize(img_list[3], (600, 450)))])
-            combined = cv2.vconcat([row1, row2])
+                pos_str = "  ".join([f"{1000 * item: 0.2f}" for item in target_he[graph_id, :3]])
+                he_pos_str = "HE Translation (mm):  " + pos_str + f"  Total: {1000 * np.linalg.norm(target_he[graph_id, :3]): 0.2f}"
+                axis_str = "  ".join([f"{item: 0.4f}" for item in axis])
+                he_rot_str = f"HE Angle {angle: 0.2f} degrees   Axis: " + axis_str
 
-            pos_str = "  ".join([f"{1000 * item: 0.2f}" for item in target_he[graph_id, :3]])
-            he_pos_str = "HE Translation (mm):  " + pos_str + f"  Total: {1000 * np.linalg.norm(target_he[graph_id, :3]): 0.2f}"
-            axis_str = "  ".join([f"{item: 0.4f}" for item in axis])
-            he_rot_str = f"HE Angle {angle: 0.2f} degrees   Axis: " + axis_str
+                cv2.putText(combined, he_pos_str, (400*num_cols, 550), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, he_rot_str, (400*num_cols, 600), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"HE Translation Error: {trans_error_he_batch[graph_id]*1000:3.2f} mm", (400*num_cols, 650), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"HE Rotation Error: {quat_error_he_batch[graph_id]:3.2f} degrees", (400*num_cols, 700), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"Relative Translation Error: {rel_pos_error:3.2f} mm", (400*num_cols, 750), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"Relative Rotation Error: {rel_rot_error:3.2f} degrees", (400*num_cols, 800), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                
+                if self.config.log_images:
+                    plt.imsave(str(self.log_dir / f"data_{count}.jpg"), combined)
+                if self.config.show_images:
+                    plt.imshow(combined)
+                    plt.show()
 
-            cv2.putText(combined, he_pos_str, (1200, 550), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-            cv2.putText(combined, he_rot_str, (1200, 600), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-            cv2.putText(combined, f"HE Translation Error: {t_loss_he_batch[graph_id]*1000:3.2f} mm", (1200, 650), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-            cv2.putText(combined, f"HE Rotation Error: {q_loss_he_batch[graph_id]:3.2f} degrees", (1200, 700), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-            cv2.putText(combined, f"Relative Translation Error: {rel_pos_error:3.2f} mm", (1200, 750), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-            cv2.putText(combined, f"Relative Rotation Error: {rel_rot_error:3.2f} degrees", (1200, 800), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-            if LOG_IMAGES:
-                plt.imsave(str(log_dir / f"data_{count}.jpg"), combined)
-            plt.imshow(combined)
-            plt.show()
+                graph_first_node = min(edge_first_nodes[edge_mask])
+                reqd_edges = edge_first_nodes == graph_first_node
 
-            graph_first_node = min(edge_first_nodes[edge_mask])
-            reqd_edges = edge_first_nodes == graph_first_node
+                rel_poses = target_rel[reqd_edges]
+                rel_poses = np.vstack((np.array([[0, 0, 0, 1, 0, 0, 0]], dtype=float), rel_poses))
+                vizualize_poses(rel_poses)
 
-            R_poses = target_R[reqd_edges]
-            R_poses = np.vstack((np.array([[0, 0, 0, 1, 0, 0, 0]], dtype=float), R_poses))
-            vizualize_poses(R_poses)
+            if count > self.max_samples:
+                break
 
+        trans_error_he = np.array(np.concatenate(trans_error_he, axis=0))
+        quat_error_he = np.array(np.concatenate(quat_error_he, axis=0))
+        trans_error_rel = np.array(np.concatenate(trans_error_rel, axis=0).reshape(-1))
+        quat_error_rel = np.array(np.concatenate(quat_error_rel, axis=0).reshape(-1))
 
-        if count > MAX_SAMPLES:
-            break
-
-    t_loss_he = np.concatenate(t_loss_he, axis=0)
-    q_loss_he = np.concatenate(q_loss_he, axis=0)
-    t_loss_R = np.concatenate(t_loss_R, axis=0).reshape(-1)
-    q_loss_R = np.concatenate(q_loss_R, axis=0).reshape(-1)
-
-    def get_stats(qty):
-        return np.mean(qty, axis=0), np.median(qty, axis=0), np.max(qty, axis=0)
-
-    mean_t_he, median_t_he, max_t_he = get_stats(t_loss_he)
-    mean_q_he, median_q_he, max_q_he = get_stats(q_loss_he)
-
-    mean_t_R, median_t_R, max_t_R = get_stats(t_loss_R)
-    mean_q_R, median_q_R, max_q_R = get_stats(q_loss_R)
-
-    fig, axs = plt.subplots(2, 2, tight_layout=True)
-    axs[0, 0].hist(1000*np.array(t_loss_he), bins=125)
-    axs[0, 0].set_title('Hand-eye Translational Error')
-    axs[0, 0].set_xlabel('Error [mm]')
-    axs[0, 0].set_ylabel('Number of Instances')
-    axs[0, 0].minorticks_on()
-    axs[0, 1].hist(q_loss_he, bins=125)
-    axs[0, 1].set_title('Hand-eye Rotational Error')
-    axs[0, 1].set_xlabel('Error [deg]')
-    axs[0, 1].set_ylabel('Number of Instances')
-    axs[0, 1].minorticks_on()
-    axs[1, 0].hist(1000*np.array(t_loss_R), bins=125)
-    axs[1, 0].set_title('Relative Translational Error')
-    axs[1, 0].set_xlabel('Error [mm]')
-    axs[1, 0].set_ylabel('Number of Instances')
-    axs[1, 0].minorticks_on()
-    axs[1, 1].hist(q_loss_R, bins=125)
-    axs[1, 1].set_title('Relative Rotational Error')
-    axs[1, 1].set_xlabel('Error [deg]')
-    axs[1, 1].set_ylabel('Number of Instances')
-    axs[1, 1].minorticks_on()
-    plt.show()
-
-    print(f'Error in translation: \n'
-            f'\t median {median_t_he:3.2f} m \n'
-            f'\t mean {mean_t_he:3.2f} m \n'
-            f'\t max {max_t_he:3.2f} m \n'
-            f'Error in rotation: \n'
-            f'\t median {median_q_he:3.2f} degrees \n'
-            f'\t mean {mean_q_he:3.2f} degrees \n'
-            f'\t max {max_q_he:3.2f} degrees \n'
-            f'Error in relative translation: \n'
-            f'\t median {median_t_R:3.2f} m \n'
-            f'\t mean {median_q_R:3.2f} m \n'
-            f'\t max {mean_t_R:3.2f} m \n'
-            f'Error in relative rotation: \n'
-            f'\t median {mean_q_R:3.2f} degrees \n'
-            f'\t mean {max_t_R:3.2f} degrees \n'
-            f'\t max {max_q_R:3.2f} degrees \n')
+        ModelEval.plot_statistics(self, trans_error_he, quat_error_he, trans_error_rel, quat_error_rel)
 
 def main():
     seed_everything(config.seed)
