@@ -172,7 +172,7 @@ class ModelEval(object):
                 min_sphere_radius = smallest_enclosing_sphere(target_rel[edge_mask, :3])
 
                 num_rows = np.floor(np.sqrt(len(img_list)))
-                num_cols = np.ceil(len(img_list)/num_rows)
+                num_cols = np.ceil(len(img_list)/num_rows) if len(img_list) % num_rows == 1 else np.ceil(len(img_list)/num_rows) + 1
 
                 # Add logic to make custom # nodes per image, currently doesn't work
                 rows = list()
@@ -191,12 +191,12 @@ class ModelEval(object):
                 axis_str = "  ".join([f"{item: 0.4f}" for item in axis])
                 he_rot_str = f"HE Angle {angle: 0.2f} degrees   Axis: " + axis_str
 
-                cv2.putText(combined, he_pos_str, (400*num_cols, 550), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-                cv2.putText(combined, he_rot_str, (400*num_cols, 600), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-                cv2.putText(combined, f"HE Translation Error: {trans_error_he_batch[graph_id]*1000:3.2f} mm", (400*num_cols, 650), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-                cv2.putText(combined, f"HE Rotation Error: {quat_error_he_batch[graph_id]:3.2f} degrees", (400*num_cols, 700), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-                cv2.putText(combined, f"Relative Translation Error: {rel_pos_error:3.2f} mm", (400*num_cols, 750), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
-                cv2.putText(combined, f"Relative Rotation Error: {rel_rot_error:3.2f} degrees", (400*num_cols, 800), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, he_pos_str, (400*(num_cols-1), 300*(num_rows-1)+100), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, he_rot_str, (400*(num_cols-1), 300*(num_rows-1)+150), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"HE Translation Error: {trans_error_he_batch[graph_id]*1000:3.2f} mm", (400*(num_cols-1), 300*(num_rows-1)+200), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"HE Rotation Error: {quat_error_he_batch[graph_id]:3.2f} degrees", (400*(num_cols-1), 300*(num_rows-1)+250), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"Relative Translation Error: {rel_pos_error:3.2f} mm", (400*(num_cols-1), 300*(num_rows-1)+300), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
+                cv2.putText(combined, f"Relative Rotation Error: {rel_rot_error:3.2f} degrees", (400*(num_cols-1), 300*(num_rows-1)+350), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 0), 1)
                 
                 if self.config.log_images:
                     plt.imsave(str(self.log_dir / f"data_{count}.jpg"), combined)
