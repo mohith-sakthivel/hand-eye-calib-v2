@@ -4,5 +4,6 @@ runs/
 models/
 ref_runs/
 eval_data/
+viz_data/
 
 __pycache__
