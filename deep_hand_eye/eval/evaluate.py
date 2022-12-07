@@ -26,7 +26,7 @@ config = AttrDict()
 config.seed = 0
 config.device = "cuda"
 config.num_workers = 8
-config.batch_size = 16
+config.batch_size = 2
 
 
 def seed_everything(seed: int):
