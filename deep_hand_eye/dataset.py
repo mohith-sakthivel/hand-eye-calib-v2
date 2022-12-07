@@ -69,10 +69,14 @@ class MVSDataset(Dataset):
 
         # Mapping between idx and unique images
         self.idx_to_img_mapping = self.idx_to_img_map()
+        self.reset_indices()
         print("Dataset initialized...")
 
     def __len__(self) -> int:
         return len(self.idx_to_img_mapping)
+
+    def reset_indices(self):
+        self.index_list = np.random.choice(range(49), size=self.num_nodes[0], replace=False)
 
     def __getitem__(self, idx) -> Data:
         """
@@ -103,6 +107,7 @@ class MVSDataset(Dataset):
 
         # Sample images of a particular random brightness
         image_list = []
+
         folder_idx, img_idx = self.idx_to_img_mapping[idx]
         # Set folder directory - derived from idx
         folder = self.image_folder + self.scans[folder_idx] + "/"
@@ -120,26 +125,17 @@ class MVSDataset(Dataset):
         # Find all images in the current scene with the selected brightness
         image_names = glob(folder + img_format.format("*"))
 
-        # Create index list
-        index_list = []
         # Sample N images
         curr_num_nodes = np.random.choice(self.num_nodes, 1)[0]
         # Create edge index tensor
         edge_index = edge_idx_gen(curr_num_nodes)
-
-        loop_var = 0
-        while loop_var < curr_num_nodes:
-            index = random.choice(range(len(image_names)))
-            if index not in index_list and index != chosen_idx:
-                index_list.append(index)
-                loop_var += 1
 
         extras = {}
         if self.get_viz_data:
             extras["raw_images"] = []
 
         # For each sampled index, get the image and append as a tensor
-        for idx in index_list:
+        for idx in self.index_list:
             # +1 because the dataset is 1-base rather than 0-base like Python indexing
             img_id = f"{idx+1:0>3}"
             file_name = folder + img_format.format(img_id)
@@ -160,7 +156,7 @@ class MVSDataset(Dataset):
         W_T_E_poses = []
         W_T_C_poses = []
         # Obtain absolute end effector pose from the JSON file
-        for index_idx in index_list:
+        for index_idx in self.index_list:
             # Camera pose matrix
             W_T_C = np.zeros((4, 4))
             W_T_C[:3, :3] = np.array(self.camera_positions["pose"]["rot"][index_idx])

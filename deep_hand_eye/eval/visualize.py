@@ -23,14 +23,15 @@ from deep_hand_eye.eval.utils import visualize_poses
 config = AttrDict()
 config.seed = 0
 config.device = "cuda"
-config.num_workers = 8
-config.batch_size = 2
-config.log_images = True
+config.opt_iterations = 2
+config.num_workers = 0
+config.batch_size = 8
+config.log_images = False
 config.log_dir = Path("viz_data")
-config.max_samples = 20
+config.max_samples = 100
 config.data_path = "data/DTU_MVS_2014/Rectified/test/"
 config.model_dir = Path("models")
-config.model_name = "12_add_diff_opt"
+config.model_name = "11_anton_conv_self_attn_after_refactor"
 config.num_hist_bins = 125
 config.show_images = True
 config.per_image_width = 480
@@ -68,7 +69,7 @@ class EvaluateModel(object):
 
     @staticmethod
     def get_stats(qty):
-        return np.median(qty, axis=0), np.mean(qty, axis=0), np.max(qty, axis=0)
+        return np.mean(qty, axis=0), np.median(qty, axis=0), np.max(qty, axis=0)
 
     def plot_statistics(
         self, trans_error_he, quat_error_he, trans_error_rel, quat_error_rel
@@ -138,8 +139,9 @@ class EvaluateModel(object):
             self.test_dataloader,
             total=self.config.max_samples // self.config.batch_size,
         ):
+            self.test_dataloader.dataset.reset_indices()
             data = data.to(config.device)
-            output_he, output_rel, _ = self.model(data)
+            output_he, output_rel, _ = self.model(data, opt_iterations=config.opt_iterations)
 
             # Move to local CPU
             output_he = output_he.cpu().numpy()
@@ -181,6 +183,9 @@ class EvaluateModel(object):
             quat_error_rel_batch = self.quat_criterion(
                 output_rel[:, 3:], target_rel[:, 3:]
             )
+
+            print("Translation:\n", trans_error_he_batch)
+            print("Rotation:\n", quat_error_he_batch)
 
             # Aggregate errors
             trans_error_he.append(trans_error_he_batch)
@@ -380,7 +385,8 @@ class EvaluateModel(object):
                 rel_poses = np.vstack(
                     (np.array([[0, 0, 0, 1, 0, 0, 0]], dtype=float), rel_poses)
                 )
-                visualize_poses(rel_poses)
+                if config.show_images:
+                    visualize_poses(rel_poses)
 
             if count > self.config.max_samples:
                 break
@@ -391,7 +397,7 @@ class EvaluateModel(object):
         quat_error_rel = np.array(np.concatenate(quat_error_rel, axis=0).reshape(-1))
 
         EvaluateModel.plot_statistics(
-            self, trans_error_he, quat_error_he, trans_error_rel, quat_error_rel
+            self, 1000 * trans_error_he, quat_error_he, 1000 * trans_error_rel, quat_error_rel
         )
 
 
