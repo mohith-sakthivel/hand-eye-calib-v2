@@ -2,10 +2,10 @@ import os
 import cv2
 import random
 import numpy as np
+import open3d as o3d
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
-import open3d as o3d
 
 import torch
 from torch_geometric.loader import DataLoader
@@ -26,7 +26,7 @@ config.device = "cuda"
 config.num_workers = 8
 config.batch_size = 2
 config.log_images = True
-config.log_dir = Path("eval")
+config.log_dir = Path("viz_data")
 config.max_samples = 20
 config.data_path = "data/DTU_MVS_2014/Rectified/test/"
 config.model_dir = Path("models")
@@ -45,7 +45,7 @@ def seed_everything(seed: int):
     torch.cuda.manual_seed_all(seed)
 
 
-class ModelEval(object):
+class EvaluateModel(object):
     def __init__(self, config: AttrDict) -> None:
         self.config = config
 
@@ -53,10 +53,7 @@ class ModelEval(object):
             os.makedirs(config.log_dir)
 
         self.model = torch.load(config.model_dir / config.model_name / "model.pt")
-        self.test_dataset = MVSDataset(
-            image_folder=config.data_path,
-            get_eval_data=True
-        )
+        self.test_dataset = MVSDataset(image_folder=config.data_path, get_viz_data=True)
         self.test_dataloader = DataLoader(
             dataset=self.test_dataset,
             batch_size=config.batch_size,
@@ -95,7 +92,7 @@ class ModelEval(object):
                 axs[row, col].set_ylabel("Number of Instances")
                 axs[row, col].minorticks_on()
 
-                mean, median, max = ModelEval.get_stats(errors[idx])
+                mean, median, max = EvaluateModel.get_stats(errors[idx])
                 print(
                     f"{error_names[idx]}: \n"
                     f"\t median {median:3.2f} {unit} \n"
@@ -127,7 +124,7 @@ class ModelEval(object):
         return np.linalg.norm(oriented_bb.extent) / 2
 
     @torch.no_grad()
-    def eval(self):
+    def evaluate(self):
         self.model.eval()
 
         trans_error_he = []
@@ -207,12 +204,12 @@ class ModelEval(object):
                 input_rel_rotation_axes = [
                     q[1:] / np.linalg.norm(q[1:]) for q in target_rel[edge_mask, 3:]
                 ]
-                max_axis_diff = ModelEval.maximum_axis_difference(
+                max_axis_diff = EvaluateModel.maximum_axis_difference(
                     np.array(input_rel_rotation_axes)
                 )
 
                 # Compute minimum sphere size
-                min_sphere_radius = ModelEval.smallest_enclosing_sphere(
+                min_sphere_radius = EvaluateModel.smallest_enclosing_sphere(
                     camera_poses[graph_id, :, :3, 3]
                 )
 
@@ -232,10 +229,24 @@ class ModelEval(object):
                     for col in range(num_cols):
                         idx = row * num_cols + col
                         if idx < len(img_list):
-                            row_images.append(cv2.resize(img_list[idx], (self.config.per_image_width, self.config.per_image_height)))
+                            row_images.append(
+                                cv2.resize(
+                                    img_list[idx],
+                                    (
+                                        self.config.per_image_width,
+                                        self.config.per_image_height,
+                                    ),
+                                )
+                            )
                         else:
                             row_images.append(
-                                cv2.resize(np.zeros_like(img_list[0]), (self.config.per_image_width, self.config.per_image_height))
+                                cv2.resize(
+                                    np.zeros_like(img_list[0]),
+                                    (
+                                        self.config.per_image_width,
+                                        self.config.per_image_height,
+                                    ),
+                                )
                             )
                     rows_images.append(cv2.hconcat(row_images))
                 viz_image = cv2.vconcat(rows_images)
@@ -258,7 +269,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     he_pos_str,
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 30),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 30,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -267,7 +281,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     he_rot_str,
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 60),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 60,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -276,7 +293,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     f"HE Translation Error: {trans_error_he_batch[graph_id]*1000:3.2f} mm",
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 90),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 90,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -285,7 +305,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     f"HE Rotation Error: {quat_error_he_batch[graph_id]:3.2f} degrees",
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 120),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 120,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -294,7 +317,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     f"Relative Translation Error: {rel_pos_error:3.2f} mm",
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 150),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 150,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -303,7 +329,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     f"Relative Rotation Error: {rel_rot_error:3.2f} degrees",
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 180),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 180,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -312,7 +341,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     f"Maximum Rotation Axis Difference {max_axis_diff:3.2f} rad",
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 210),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 210,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -321,7 +353,10 @@ class ModelEval(object):
                 cv2.putText(
                     viz_image,
                     f"Smallest Enclosing Sphere Radius: {min_sphere_radius:3.2f} m",
-                    (self.config.per_image_width * (num_cols - 1) + 10, self.config.per_image_height * (num_rows - 1) + 240),
+                    (
+                        self.config.per_image_width * (num_cols - 1) + 10,
+                        self.config.per_image_height * (num_rows - 1) + 240,
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (255, 0, 0),
@@ -355,15 +390,15 @@ class ModelEval(object):
         trans_error_rel = np.array(np.concatenate(trans_error_rel, axis=0).reshape(-1))
         quat_error_rel = np.array(np.concatenate(quat_error_rel, axis=0).reshape(-1))
 
-        ModelEval.plot_statistics(
+        EvaluateModel.plot_statistics(
             self, trans_error_he, quat_error_he, trans_error_rel, quat_error_rel
         )
 
 
 def main():
     seed_everything(config.seed)
-    model_eval = ModelEval(config=config)
-    model_eval.eval()
+    evaluation_object = EvaluateModel(config=config)
+    evaluation_object.evaluate()
 
 
 if __name__ == "__main__":

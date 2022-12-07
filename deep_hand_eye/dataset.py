@@ -28,11 +28,11 @@ class MVSDataset(Dataset):
         max_rot_offset: float = 90.0,
         transform: Optional[transforms.Compose] = None,
         image_size: Tuple = (224, 224),
-        get_eval_data: bool = False,
+        get_viz_data: bool = False,
     ):
 
         self.image_folder = image_folder
-        self.get_eval_data = get_eval_data
+        self.get_viz_data = get_viz_data
         self.num_nodes = num_nodes
         self.max_trans_offset = max_trans_offset
         self.max_rot_offset = np.deg2rad(max_rot_offset)
@@ -135,7 +135,7 @@ class MVSDataset(Dataset):
                 loop_var += 1
 
         extras = {}
-        if self.get_eval_data:
+        if self.get_viz_data:
             extras["raw_images"] = []
 
         # For each sampled index, get the image and append as a tensor
@@ -144,13 +144,13 @@ class MVSDataset(Dataset):
             img_id = f"{idx+1:0>3}"
             file_name = folder + img_format.format(img_id)
             image = Image.open(file_name).convert("RGB")
-            if self.get_eval_data:
+            if self.get_viz_data:
                 extras["raw_images"].append(np.asarray(image))
             transformed_image = self.transform(image)
             image_list.append(transformed_image)
 
         image_list = torch.stack(image_list)
-        if self.get_eval_data:
+        if self.get_viz_data:
             extras["raw_images"] = np.stack(extras["raw_images"], axis=0)
 
         # Initialize table for all relative transforms
@@ -172,7 +172,7 @@ class MVSDataset(Dataset):
             W_T_E = W_T_C @ C_T_E
             W_T_E_poses.append(W_T_E)
 
-        if self.get_eval_data:
+        if self.get_viz_data:
             extras["camera_poses"] = W_T_C_poses
 
         # Loop through randomly sampled positions
