@@ -27,6 +27,8 @@ config.seed = 0
 config.device = "cuda"
 config.num_workers = 8
 config.batch_size = 16
+config.opt_iterations = 1
+config.num_viewpoints = 5
 
 
 def seed_everything(seed: int):
@@ -155,7 +157,7 @@ if __name__ == "__main__":
 
     model = torch.load(MODEL_PATH)
 
-    test_dataset = MVSDataset(image_folder=DATA_PATH)
+    test_dataset = MVSDataset(image_folder=DATA_PATH, num_nodes=[config.num_viewpoints])
     test_dataloader = DataLoader(
         dataset=test_dataset,
         batch_size=config.batch_size,
@@ -168,5 +170,5 @@ if __name__ == "__main__":
         dataloader=test_dataloader,
         device=config.device,
         num_samples=NUM_SAMPLES,
-        opt_iterations=1,
+        opt_iterations=config.opt_iterations,
     )
