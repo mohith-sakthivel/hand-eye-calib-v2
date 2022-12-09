@@ -1,11 +1,9 @@
 import numpy as np
-from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
-from torch_geometric.utils import scatter, softmax
 
 from deep_hand_eye.utils import unbatch
 
@@ -165,7 +163,7 @@ class SimpleConvEdgeUpdate(MessagePassing):
         edge_out_channels: int,
         use_attention: bool = True,
     ):
-        super().__init__()
+        super().__init__(aggr="mean")
 
         self.use_attention = use_attention
 
@@ -269,25 +267,6 @@ class SimpleConvEdgeUpdate(MessagePassing):
             msg = self.att(msg)
 
         return msg.view(num_edges, -1)
-
-    def aggregate(
-        self,
-        inputs: torch.Tensor,
-        index: torch.Tensor,
-        H: int,
-        W: int,
-        ptr: Optional[torch.Tensor] = None,
-        dim_size: Optional[int] = None,
-    ) -> torch.Tensor:
-
-        num_edges = inputs.shape[0]
-        attn = self.msg_attention(inputs.reshape(num_edges, -1, H, W))
-        attn = softmax(attn, index, ptr, dim_size)
-        aggr_msg = scatter(
-            src=attn * inputs, index=index, dim_size=dim_size, reduce="sum"
-        )
-
-        return aggr_msg
 
     def update(
         self, aggr_out: torch.Tensor, x: torch.Tensor, H: int, W: int
