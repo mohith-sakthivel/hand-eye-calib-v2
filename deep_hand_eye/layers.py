@@ -191,23 +191,6 @@ class SimpleConvEdgeUpdate(MessagePassing):
             ),
         )
 
-        self.msg_attention = nn.Sequential(
-            make_conv_block(
-                input_dim=node_out_channels,
-                feat_dim=node_out_channels // 2,
-                output_dim=node_out_channels // 2,
-                padding=0,
-            ),
-            nn.Conv2d(
-                in_channels=node_out_channels // 2,
-                out_channels=1,
-                kernel_size=3,
-                stride=1,
-                padding=0,
-            ),
-            nn.Flatten(start_dim=-3),
-        )
-
         self.node_update_cnn = nn.Sequential(
             nn.Conv2d(
                 in_channels=node_in_channels + node_out_channels,
