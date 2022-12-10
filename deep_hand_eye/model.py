@@ -34,7 +34,7 @@ class GCNet(nn.Module):
         self.edge_feat_dim = edge_feat_dim
 
         # Setup the feature extractor
-        self.feature_extractor = resnet34(pretrained=True)
+        self.feature_extractor = resnet34()
         self.process_feat = nn.Conv2d(
             in_channels=512,
             out_channels=node_feat_dim,
