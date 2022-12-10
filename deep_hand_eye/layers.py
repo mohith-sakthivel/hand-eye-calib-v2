@@ -21,6 +21,7 @@ def make_conv_block(
         nn.ReLU(inplace=True),
         nn.Conv2d(feat_dim, output_dim, kernel_size, stride, padding),
         nn.ReLU(inplace=True),
+        nn.AdaptiveAvgPool2d((3, 3)),
     )
 
     return block

@@ -5,7 +5,7 @@ import theseus as th
 import torch.nn as nn
 import torch.nn.functional as F
 
-from deep_hand_eye.resnet import resnet34
+from deep_hand_eye.resnet import resnet18
 from deep_hand_eye.theseus_opt import build_BA_Layer
 from deep_hand_eye.pose_utils import qexp, xyz_quaternion_to_xyz_log_quaternion
 from deep_hand_eye.layers import (
@@ -18,8 +18,8 @@ from deep_hand_eye.layers import (
 class GCNet(nn.Module):
     def __init__(
         self,
-        node_feat_dim: int = 512,
-        edge_feat_dim: int = 512,
+        node_feat_dim: int = 128,
+        edge_feat_dim: int = 128,
         gnn_recursion: int = 2,
         droprate: float = 0.0,
         pose_proj_dim: int = 32,
@@ -34,13 +34,12 @@ class GCNet(nn.Module):
         self.edge_feat_dim = edge_feat_dim
 
         # Setup the feature extractor
-        self.feature_extractor = resnet34()
-        self.process_feat = nn.Conv2d(
-            in_channels=512,
-            out_channels=node_feat_dim,
-            kernel_size=3,
-            stride=1,
-            padding=1,
+        self.feature_extractor = resnet18()
+        self.process_feat = nn.Sequential(
+            nn.Conv2d(256, 256, 3, 1, 0),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, node_feat_dim, 3, 1, 0)
         )
 
         # Project relative robot displacement
@@ -67,22 +66,23 @@ class GCNet(nn.Module):
             self.edge_R = nn.Sequential(
                 nn.Conv2d(
                     in_channels=edge_feat_dim,
-                    out_channels=edge_feat_dim // 2,
+                    out_channels=edge_feat_dim,
                     kernel_size=3,
                 ),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(
-                    in_channels=edge_feat_dim // 2,
-                    out_channels=edge_feat_dim // 2,
+                    in_channels=edge_feat_dim,
+                    out_channels=edge_feat_dim,
                     kernel_size=3,
                 ),
                 nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool2d((3, 3))
             )
             self.xyz_R = nn.Conv2d(
-                in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
+                in_channels=edge_feat_dim, out_channels=3, kernel_size=3
             )
             self.log_quat_R = nn.Conv2d(
-                in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
+                in_channels=edge_feat_dim, out_channels=3, kernel_size=3
             )
 
         # Setup the hand-eye pose regression networks
@@ -90,8 +90,8 @@ class GCNet(nn.Module):
         def module_constructor() -> nn.Module:
             return make_conv_block(
                 input_dim=edge_feat_dim + pose_proj_dim + 2 * node_feat_dim,
-                feat_dim=edge_feat_dim // 2,
-                output_dim=edge_feat_dim // 2,
+                feat_dim=edge_feat_dim,
+                output_dim=edge_feat_dim,
                 padding=0,
             )
 
@@ -103,7 +103,7 @@ class GCNet(nn.Module):
 
         # Attention to combine information from all edges
         self.edge_attn_he = nn.Conv2d(
-            in_channels=edge_feat_dim // 2,
+            in_channels=edge_feat_dim,
             out_channels=1,
             kernel_size=3,
             stride=1,
@@ -112,10 +112,10 @@ class GCNet(nn.Module):
 
         # Setup Regression heads
         self.xyz_he = nn.Conv2d(
-            in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
+            in_channels=edge_feat_dim, out_channels=3, kernel_size=3
         )
         self.log_quat_he = nn.Conv2d(
-            in_channels=edge_feat_dim // 2, out_channels=3, kernel_size=3
+            in_channels=edge_feat_dim, out_channels=3, kernel_size=3
         )
 
         # Initialize networks
