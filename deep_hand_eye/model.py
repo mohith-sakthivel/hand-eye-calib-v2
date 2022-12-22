@@ -9,9 +9,9 @@ from deep_hand_eye.resnet import resnet18
 from deep_hand_eye.theseus_opt import build_BA_Layer
 from deep_hand_eye.pose_utils import qexp, xyz_quaternion_to_xyz_log_quaternion
 from deep_hand_eye.layers import (
-    make_conv_block,
     SelfAttention,
     SimpleConvEdgeUpdate,
+    EssentialMatixModule,
 )
 
 
@@ -21,14 +21,12 @@ class GCNet(nn.Module):
         node_feat_dim: int = 128,
         edge_feat_dim: int = 128,
         gnn_recursion: int = 2,
-        droprate: float = 0.0,
         pose_proj_dim: int = 32,
         rel_pose: bool = True,
     ) -> None:
 
         super().__init__()
         self.gnn_recursion = gnn_recursion
-        self.droprate = droprate
         self.pose_proj_dim = pose_proj_dim
         self.rel_pose = rel_pose
         self.edge_feat_dim = edge_feat_dim
@@ -39,7 +37,7 @@ class GCNet(nn.Module):
             nn.Conv2d(256, 256, 3, 1, 0),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, node_feat_dim, 3, 1, 0)
+            nn.Conv2d(256, node_feat_dim, 3, 1, 0),
         )
 
         # Project relative robot displacement
@@ -61,38 +59,31 @@ class GCNet(nn.Module):
             edge_out_channels=edge_feat_dim,
         )
 
+        self.emm = EssentialMatixModule(
+            in_dim=node_feat_dim,
+            feat_dim=192,
+            out_dim=512,
+        )
+
         # Setup the relative pose regression networks
         if self.rel_pose:
             self.edge_R = nn.Sequential(
-                nn.Conv2d(
-                    in_channels=edge_feat_dim,
-                    out_channels=edge_feat_dim,
-                    kernel_size=3,
-                ),
+                nn.Linear(512, 256),
                 nn.ReLU(inplace=True),
-                nn.Conv2d(
-                    in_channels=edge_feat_dim,
-                    out_channels=edge_feat_dim,
-                    kernel_size=3,
-                ),
+                nn.Linear(256, 256),
                 nn.ReLU(inplace=True),
-                nn.AdaptiveAvgPool2d((3, 3))
             )
-            self.xyz_R = nn.Conv2d(
-                in_channels=edge_feat_dim, out_channels=3, kernel_size=3
-            )
-            self.log_quat_R = nn.Conv2d(
-                in_channels=edge_feat_dim, out_channels=3, kernel_size=3
-            )
+            self.xyz_R = nn.Linear(256, 3)
+            self.log_quat_R = nn.Linear(256, 3)
 
         # Setup the hand-eye pose regression networks
         # Self-attention for edges to transfer information
         def module_constructor() -> nn.Module:
-            return make_conv_block(
-                input_dim=edge_feat_dim + pose_proj_dim + 2 * node_feat_dim,
-                feat_dim=edge_feat_dim,
-                output_dim=edge_feat_dim,
-                padding=0,
+            return nn.Sequential(
+                nn.Linear(512 + pose_proj_dim, 256),
+                nn.ReLU(inplace=True),
+                nn.Linear(256, 256),
+                nn.ReLU(inplace=True),
             )
 
         self.edge_self_attn_he = SelfAttention(
@@ -102,20 +93,22 @@ class GCNet(nn.Module):
         )
 
         # Attention to combine information from all edges
-        self.edge_attn_he = nn.Conv2d(
-            in_channels=edge_feat_dim,
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=0,
+        self.edge_attn_he = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 1)
         )
 
         # Setup Regression heads
-        self.xyz_he = nn.Conv2d(
-            in_channels=edge_feat_dim, out_channels=3, kernel_size=3
+        self.xyz_he = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 3)
         )
-        self.log_quat_he = nn.Conv2d(
-            in_channels=edge_feat_dim, out_channels=3, kernel_size=3
+        self.log_quat_he = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 3)
         )
 
         # Initialize networks
@@ -124,6 +117,7 @@ class GCNet(nn.Module):
             self.process_feat,
             self.proj_init_edge,
             self.gnn_layer,
+            self.emm,
             self.edge_self_attn_he,
             self.edge_attn_he,
             self.xyz_he,
@@ -165,28 +159,26 @@ class GCNet(nn.Module):
 
         # Compute edge features
         rel_disp_feat = F.relu(self.proj_rel_disp(edge_attr), inplace=True)
-        rel_disp_feat = rel_disp_feat.view(*rel_disp_feat.shape, 1, 1).expand(
+        rel_disp_feat_2d = rel_disp_feat.view(*rel_disp_feat.shape, 1, 1).expand(
             -1, -1, *x.shape[-2:]
         )
-        edge_node_feat = self.join_node_edge_feat(x, edge_index, [rel_disp_feat])
+        edge_node_feat = self.join_node_edge_feat(x, edge_index, [rel_disp_feat_2d])
         edge_feat = F.relu(self.proj_init_edge(edge_node_feat), inplace=True)
 
         # Graph message passing step
         for _ in range(self.gnn_recursion):
-            edge_feat = torch.cat([edge_feat, rel_disp_feat], dim=-3)
+            edge_feat = torch.cat([edge_feat, rel_disp_feat_2d], dim=-3)
             x, edge_feat = self.gnn_layer(x, edge_index, edge_feat)
             x = F.relu(x)
             edge_feat = F.relu(edge_feat)
 
-        # Drop edge features if necessary
-        if self.droprate > 0:
-            edge_feat = F.dropout(edge_feat, p=self.droprate, training=self.training)
+        emm_edge_feat = self.emm(x[edge_index[0]], x[edge_index[1]])
 
         # Predict the relative pose between images
         if self.rel_pose:
-            edge_R_feat = self.edge_R(edge_feat)
-            xyz_R = self.xyz_R(edge_R_feat).squeeze()
-            log_quat_R = self.log_quat_R(edge_R_feat).squeeze()
+            edge_R_feat = self.edge_R(emm_edge_feat)
+            xyz_R = self.xyz_R(edge_R_feat)
+            log_quat_R = self.log_quat_R(edge_R_feat)
             rel_pose_out = torch.cat((xyz_R, log_quat_R), dim=-1)
             C_T_C_pred = torch.cat((xyz_R, qexp(log_quat_R)), dim=-1).reshape(
                 data.num_graphs, -1, 7
@@ -195,9 +187,7 @@ class GCNet(nn.Module):
             rel_pose_out = None
 
         # Process edge features for regressing hand-eye parameters
-        edge_he_feat = self.join_node_edge_feat(
-            x, edge_index, [edge_feat, rel_disp_feat]
-        )
+        edge_he_feat = torch.cat([emm_edge_feat, rel_disp_feat], dim=-1)
         # Find the graph id of each edge using the source node
         edge_graph_ids = data.batch[data.edge_index[0].cpu().numpy()]
         # Perform self-attention of edge features
@@ -205,7 +195,7 @@ class GCNet(nn.Module):
 
         # Calculate the attention weight over the edges
         edge_he_logits = (
-            self.edge_attn_he(edge_he_feat).squeeze().repeat(data.num_graphs, 1)
+            self.edge_attn_he(edge_he_feat).reshape(1, -1).repeat(data.num_graphs, 1)
         )
         num_graphs = (
             torch.arange(0, data.num_graphs).view(-1, 1).to(edge_graph_ids.device)
@@ -219,8 +209,8 @@ class GCNet(nn.Module):
         edge_he_aggr = edge_he_aggr.view(data.num_graphs, *feat_shape)
 
         # Predict the hand-eye parameters
-        xyz_he = self.xyz_he(edge_he_aggr).reshape(-1, 3)
-        log_quat_he = self.log_quat_he(edge_he_aggr).reshape(-1, 3)
+        xyz_he = self.xyz_he(edge_he_aggr)
+        log_quat_he = self.log_quat_he(edge_he_aggr)
         E_T_C_pred = torch.cat([xyz_he, qexp(log_quat_he)], dim=-1)
 
         # Perform differentiable non-linear optimization
