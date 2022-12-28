@@ -26,7 +26,7 @@ config = AttrDict()
 config.seed = 0
 config.device = "cuda"
 config.num_workers = 8
-config.epochs = 40
+config.epochs = 45
 config.save_dir = ""
 config.model_name = ""
 config.batch_size = 16
@@ -35,6 +35,10 @@ config.eval_samples = 2000  # Number of graphs to evaluate on
 config.log_freq = 20  # Iters to log after
 config.save_freq = 5  # Epochs to save after. Set None to not save.
 config.rel_pose_coeff = 1  # Set None to remove this auxiliary loss
+config.num_opt_iter_train = 1
+config.num_opt_iter_test = 1
+config.opt_start_epoch_train = 35
+config.opt_start_epoch_test = 35
 config.model_name = ""
 config.log_dir = Path("runs")
 config.model_save_dir = Path("models")
@@ -160,7 +164,7 @@ class Trainer(object):
                 target_he, target_R = data.y, data.y_edge
                 pred_he, pred_R, _ = self.model(
                     data=data,
-                    opt_iterations=0 if epoch < 10 else 1
+                    opt_iterations=0 if epoch < config.opt_start_epoch_train else config.num_opt_iter_train
                 )
 
                 # Calculate losses
@@ -180,7 +184,7 @@ class Trainer(object):
                 loss_total.backward()
                 self.optimizer.step()
 
-                if iter_no % self.config.log_freq == 0:
+                if iter_no > 0 and iter_no % self.config.log_freq == 0:
                     self.tb_writer.add_scalar("train/epoch", epoch, iter_no)
                     self.tb_writer.add_scalar("train/total_loss", loss_total, iter_no)
                     self.tb_writer.add_scalar("train/he_pose_loss", loss_he, iter_no)
@@ -216,7 +220,7 @@ class Trainer(object):
                         device=self.device,
                         num_samples=self.config.eval_samples,
                         eval_rel_pose=self.config.rel_pose_coeff is not None,
-                        opt_iterations=0 if epoch < 10 else 1,
+                        opt_iterations=0 if epoch < config.opt_start_epoch_test else config.num_opt_iter_test,
                         iter_no=iter_no,
                         tb_writer=self.tb_writer
 
@@ -230,106 +234,6 @@ class Trainer(object):
                 and (epoch + 1) % self.config.save_freq == 0
             ):
                 self.save_model()
-
-    @torch.no_grad()
-    def eval(
-        self,
-        dataloader: DataLoader,
-        iter_no: int,
-        max_samples: int = 2000,
-        eval_rel_pose: bool = True,
-        opt_iterations: int = 0,
-    ):
-        self.model.eval()
-
-        # loss functions
-        def t_criterion(t_pred, t_gt):
-            return np.linalg.norm(t_pred - t_gt)
-
-        q_criterion = quaternion_angular_error
-        t_loss_he = []
-        q_loss_he = []
-        if eval_rel_pose:
-            t_loss_R = []
-            q_loss_R = []
-        num_samples = 0
-
-        # inference loop
-        for batch_idx, data in tqdm(
-            enumerate(dataloader),
-            desc=f"[Iter {iter_no:04d}] eval",
-            total=max_samples / self.config.batch_size,
-        ):
-
-            num_samples += data.num_graphs
-            data = data.to(self.device)
-            output_he, output_R, _ = self.model(data, opt_iterations=opt_iterations)
-            output_he = output_he.cpu().data.numpy()
-            target_he = data.y.to("cpu").numpy()
-
-            # normalize the predicted quaternions
-            q = [rotation_matrix_to_quaternion(p[:3, :3]) for p in output_he]
-            output_he = np.hstack((output_he[:, :3, 3], np.asarray(q)))
-            q = [rotation_matrix_to_quaternion(p[:3, :3]) for p in target_he]
-            target_he = np.hstack((target_he[:, :3, 3], np.asarray(q)))
-
-            # calculate losses
-            for p, t in zip(output_he, target_he):
-                t_loss_he.append(t_criterion(p[:3], t[:3]))
-                q_loss_he.append(q_criterion(p[3:], t[3:]))
-
-            if eval_rel_pose:
-                output_R = output_R.cpu().data.numpy()
-                # normalize the predicted quaternions
-                target_R = data.y_edge.to("cpu").numpy()
-
-                q = [qexp(p[3:]) for p in output_R]
-                output_R = np.hstack((output_R[:, :3], np.asarray(q)))
-
-                for p, t in zip(output_R, target_R):
-                    t_loss_R.append(t_criterion(p[:3], t[:3]))
-                    q_loss_R.append(q_criterion(p[3:], t[3:]))
-
-            if num_samples > max_samples:
-                break
-
-        median_t_he = np.median(t_loss_he)
-        median_q_he = np.median(q_loss_he)
-        mean_t_he = np.mean(t_loss_he)
-        mean_q_he = np.mean(q_loss_he)
-        max_t_he = np.max(t_loss_he)
-        max_q_he = np.max(q_loss_he)
-
-        print(
-            f"Iter No [{iter_no:04d}] \n"
-            f"Error in translation: \n"
-            f"\t median {median_t_he:3.2f} m \n"
-            f"\t mean {mean_t_he:3.2f} m \n"
-            f"\t max {max_t_he:3.2f} m \n"
-            f"Error in rotation: \n"
-            f"\t median {median_q_he:3.2f} degrees \n"
-            f"\t mean {mean_q_he:3.2f} degrees \n"
-            f"\t max {max_q_he:3.2f} degrees \n"
-        )
-
-        self.tb_writer.add_scalar("test/he_trans_median", median_t_he, iter_no)
-        self.tb_writer.add_scalar("test/he_trans_mean", mean_t_he, iter_no)
-        self.tb_writer.add_scalar("test/he_trans_max", max_t_he, iter_no)
-        self.tb_writer.add_scalar("test/he_rot_median", median_q_he, iter_no)
-        self.tb_writer.add_scalar("test/he_rot_mean", mean_q_he, iter_no)
-        self.tb_writer.add_scalar("test/he_rot_max", max_q_he, iter_no)
-
-        if eval_rel_pose:
-            self.tb_writer.add_scalar(
-                "test/rel_trans_median", np.median(t_loss_R), iter_no
-            )
-            self.tb_writer.add_scalar("test/rel_trans_mean", np.mean(t_loss_R), iter_no)
-            self.tb_writer.add_scalar("test/rel_trans_max", np.max(t_loss_R), iter_no)
-            self.tb_writer.add_scalar(
-                "test/rel_rot_median", np.median(q_loss_R), iter_no
-            )
-            self.tb_writer.add_scalar("test/rel_rot_mean", np.mean(q_loss_R), iter_no)
-            self.tb_writer.add_scalar("test/rel_rot_max", np.max(q_loss_R), iter_no)
 
     def save_model(self):
         save_dir = self.config.model_save_dir / self.config.model_name / self.run_id
